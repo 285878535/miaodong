@@ -35,7 +35,7 @@ struct TodoRowView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
         .opacity(pendingComplete ? 0.55 : 1)
-        .animation(.easeOut(duration: 0.2), value: pendingComplete)
+        .animation(.easeOut(duration: 0.4), value: pendingComplete)
     }
 
     // MARK: - macOS 风格 checkbox（28×28 命中区，视觉 18×18，带内阴影 / hover）
@@ -82,8 +82,8 @@ struct TodoRowView: View {
                 .frame(width: 18, height: 18)
                 .shadow(color: visualCompleted ? AppPalette.accent.opacity(0.35) : .clear, radius: 4, x: 0, y: 1)
                 .scaleEffect(checkHovered ? 1.06 : 1.0)
-                .animation(.easeOut(duration: 0.12), value: checkHovered)
-                .animation(.spring(response: 0.28, dampingFraction: 0.6), value: visualCompleted)
+                .animation(.easeOut(duration: 0.24), value: checkHovered)
+                .animation(.spring(response: 0.56, dampingFraction: 0.6), value: visualCompleted)
             }
         }
         .buttonStyle(.plain)
@@ -126,15 +126,23 @@ struct TodoRowView: View {
     @ViewBuilder
     private var metaLine: some View {
         if let due = todo.dueDate {
-            HStack(spacing: 6) {
-                metaChip(systemName: "clock", text: timeLabel(for: due))
-
-                if todo.notifyOffsetSeconds > 0 {
-                    metaChip(systemName: "bell", text: "提前 \(humanDuration(todo.notifyOffsetSeconds))")
+            VStack(alignment: .leading, spacing: 3) {
+                // 第一行：时间 + 提前提醒
+                HStack(spacing: 6) {
+                    if let snooze = todo.snoozeUntil {
+                        metaChip(systemName: "clock.badge", text: snoozeTimeLabel(for: snooze))
+                        metaChip(systemName: "bell.badge", text: snoozeRemainingLabel(for: snooze))
+                    } else {
+                        metaChip(systemName: "clock", text: timeLabel(for: due))
+                        if todo.notifyOffsetSeconds > 0 {
+                            metaChip(systemName: "bell", text: "提前 \(humanDuration(todo.notifyOffsetSeconds))")
+                        }
+                    }
                 }
 
+                // 第二行：重复间隔（有才显示）
                 if let interval = todo.repeatIntervalSeconds {
-                    metaChip(systemName: "timer", text: "间隔 \(humanDuration(interval))（共 3 次）")
+                    metaChip(systemName: "timer", text: "间隔 \(humanDuration(interval))")
                 }
             }
         }
@@ -158,7 +166,7 @@ struct TodoRowView: View {
             onToggle()
             return
         }
-        withAnimation(.easeIn(duration: 0.15)) {
+        withAnimation(.easeIn(duration: 0.30)) {
             pendingComplete = true
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
@@ -207,6 +215,28 @@ struct TodoRowView: View {
             f.dateFormat = "M月d日 HH:mm"
         }
         return f.string(from: due)
+    }
+
+    private func snoozeTimeLabel(for snooze: Date) -> String {
+        let cal = Calendar.current
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "zh_CN")
+        if cal.isDateInToday(snooze) {
+            f.dateFormat = "今天 HH:mm"
+        } else if cal.isDateInTomorrow(snooze) {
+            f.dateFormat = "明天 HH:mm"
+        } else {
+            f.dateFormat = "M月d日 HH:mm"
+        }
+        return "稍后 \(f.string(from: snooze))"
+    }
+
+    private func snoozeRemainingLabel(for snooze: Date) -> String {
+        let remaining = snooze.timeIntervalSince(Date())
+        if remaining <= 0 { return "稍后提醒已到" }
+        if remaining < 60 { return "\(max(1, Int(ceil(remaining)))) 秒后提醒" }
+        if remaining < 3600 { return "\(max(1, Int(ceil(remaining / 60)))) 分钟后提醒" }
+        return "\(max(1, Int(ceil(remaining / 3600)))) 小时后提醒"
     }
 
     private func recurringLabel(_ pattern: String) -> String {

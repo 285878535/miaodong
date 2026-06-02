@@ -13,6 +13,9 @@ final class AlertWindowController {
     static let shared = AlertWindowController()
 
     private var panels: [UUID: NSPanel] = [:]
+    /// 每个 panel 在右上角栈中占用的 slot 序号（0=最上）；
+    /// 中间被关闭的 panel 会释放 slot，新弹的填进空位，避免重叠。
+    private var panelSlots: [UUID: Int] = [:]
 
     private init() {}
 
@@ -26,6 +29,9 @@ final class AlertWindowController {
         if let existing = panels[todo.id] {
             existing.orderOut(nil)
             panels.removeValue(forKey: todo.id)
+            if let slot = panelSlots.removeValue(forKey: todo.id) {
+                _ = slot   // 释放该 slot，下面 nextAvailableSlot() 会重新分配
+            }
         }
 
         let id = todo.id
@@ -57,7 +63,9 @@ final class AlertWindowController {
         panel.contentViewController = hosting
         panel.setContentSize(NSSize(width: 380, height: 200))
 
-        positionPanel(panel)
+        let slot = nextAvailableSlot()
+        panelSlots[id] = slot
+        positionPanel(panel, slot: slot)
         panel.orderFrontRegardless()
         panels[id] = panel
     }
@@ -66,6 +74,7 @@ final class AlertWindowController {
         if let panel = panels[id] {
             panel.orderOut(nil)
             panels.removeValue(forKey: id)
+            panelSlots.removeValue(forKey: id)
         }
     }
 
@@ -74,6 +83,7 @@ final class AlertWindowController {
             panel.orderOut(nil)
         }
         panels.removeAll()
+        panelSlots.removeAll()
     }
 
     // MARK: - 内部
@@ -97,35 +107,59 @@ final class AlertWindowController {
         return panel
     }
 
-    /// 屏幕右上角；多个弹窗自动向下堆叠
-    private func positionPanel(_ panel: NSPanel) {
-        guard let screen = NSScreen.main else { return }
+    /// 鼠标所在屏的右上角；多个弹窗按 slot 向下堆叠（中间释放的 slot 会被新窗复用）。
+    private func positionPanel(_ panel: NSPanel, slot: Int) {
+        let screen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) })
+            ?? NSScreen.main
+            ?? NSScreen.screens.first
+        guard let screen else { return }
         let visible = screen.visibleFrame
         let margin: CGFloat = 16
         let frame = panel.frame
         let x = visible.maxX - frame.width - margin
-        // 已有面板数量决定纵向偏移
-        let stackOffset = CGFloat(panels.count) * (frame.height + 10)
+        let stackOffset = CGFloat(slot) * (frame.height + 10)
         let y = visible.maxY - frame.height - margin - stackOffset
         panel.setFrameOrigin(NSPoint(x: x, y: y))
     }
 
+    /// 从 0 开始找第一个未被占用的 slot
+    private func nextAvailableSlot() -> Int {
+        let used = Set(panelSlots.values)
+        var slot = 0
+        while used.contains(slot) { slot += 1 }
+        return slot
+    }
+
     private func makeTimeText(for todo: Todo) -> String {
+        if let snooze = todo.snoozeUntil {
+            return "稍后提醒：" + formatDate(snooze)
+        }
         guard let due = todo.dueDate else { return "现在" }
+        return formatDate(due)
+    }
+
+    private func formatDate(_ date: Date) -> String {
         let cal = Calendar.current
         let f = DateFormatter()
         f.locale = Locale(identifier: "zh_CN")
-        if cal.isDateInToday(due) {
+        if cal.isDateInToday(date) {
             f.dateFormat = "今天 HH:mm"
-        } else if cal.isDateInTomorrow(due) {
+        } else if cal.isDateInTomorrow(date) {
             f.dateFormat = "明天 HH:mm"
         } else {
             f.dateFormat = "M月d日 HH:mm"
         }
-        return f.string(from: due)
+        return f.string(from: date)
     }
 
     private func makeOffsetText(for todo: Todo) -> String? {
+        if let snooze = todo.snoozeUntil {
+            let remaining = snooze.timeIntervalSince(Date())
+            if remaining <= 0 { return "稍后提醒已到" }
+            if remaining < 60 { return "\(max(1, Int(ceil(remaining)))) 秒后再次提醒" }
+            if remaining < 3600 { return "\(max(1, Int(ceil(remaining / 60)))) 分钟后再次提醒" }
+            return "\(max(1, Int(ceil(remaining / 3600)))) 小时后再次提醒"
+        }
         guard todo.notifyOffsetSeconds > 0 else { return nil }
         return "提前 \(humanInterval(todo.notifyOffsetSeconds)) 提醒"
     }

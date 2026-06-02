@@ -58,6 +58,7 @@ enum IconDisplayMode: String, CaseIterable, Sendable {
 /// 模式变更通知（SettingsView 改值后发出，AppDelegate 监听并重新装载）
 extension Notification.Name {
     static let iconDisplayModeDidChange = Notification.Name("iconDisplayModeDidChange")
+    static let accentColorDidChange     = Notification.Name("accentColorDidChange")
 }
 
 enum Tag: String, Codable, CaseIterable, Sendable {
@@ -78,7 +79,7 @@ enum Tag: String, Codable, CaseIterable, Sendable {
         case .planning: return "计划"
         case .creative: return "创意"
         case .rest:     return "休息"
-        case .learning: return "学习"
+        case .learning: return "自学"
         case .family:   return "家庭"
         case .personal: return "个人"
         case .other:    return "其他"

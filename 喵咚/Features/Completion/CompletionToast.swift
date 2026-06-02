@@ -83,7 +83,7 @@ struct CompletionToast: View {
         .scaleEffect(visible ? 1.0 : 0.85)
         .opacity(visible ? 1.0 : 0)
         .onAppear {
-            withAnimation(.spring(response: 0.38, dampingFraction: 0.7)) {
+            withAnimation(.spring(response: 0.76, dampingFraction: 0.7)) {
                 visible = true
             }
         }

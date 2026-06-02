@@ -11,6 +11,9 @@ struct AddTodoView: View {
     @State private var text: String = ""
     @State private var parseResult: TodoParseResult?
     @FocusState private var textFocused: Bool
+    /// 用户在面板里临时关闭"间隔提醒"开关 —— 关掉后提交不写入 repeatIntervalSeconds。
+    /// 文本里再次出现间隔关键词 / 用户改文本时会被重新置 true。
+    @State private var intervalEnabledOverride: Bool = true
 
     let isEditing: Bool
     let onSubmit: (Todo) -> Void
@@ -142,10 +145,34 @@ struct AddTodoView: View {
                 fieldDivider()
                 intervalSection(r)
             }
+            if let due = r.dueDate {
+                let fireDate = due.addingTimeInterval(-Double(r.notifyOffsetSeconds))
+                if fireDate > Date() {
+                    fieldDivider()
+                    nextReminderRow(fireDate)
+                }
+            }
         }
         .background(AppPalette.white)
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .shadow(color: AppPalette.primary.opacity(0.04), radius: 6, x: 0, y: 2)
+    }
+
+    private func nextReminderRow(_ fireDate: Date) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "bell.fill")
+                .font(.system(size: 11))
+                .foregroundStyle(AppPalette.accent.opacity(0.8))
+            Text("下次提醒")
+                .font(.system(size: 13))
+                .foregroundStyle(AppPalette.primary)
+            Spacer()
+            Text(formatDate(fireDate))
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(AppPalette.accent)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
     }
 
     private func fieldDivider() -> some View {
@@ -179,7 +206,7 @@ struct AddTodoView: View {
                     .font(.system(size: 13))
                     .foregroundStyle(AppPalette.primary)
                 Spacer()
-                Toggle("", isOn: .constant(true))
+                Toggle("", isOn: $intervalEnabledOverride)
                     .labelsHidden()
                     .toggleStyle(.switch)
                     .controlSize(.small)
@@ -188,11 +215,21 @@ struct AddTodoView: View {
             .padding(.horizontal, 14)
             .padding(.top, 10)
 
-            if let interval = r.repeatIntervalSeconds {
+            if let interval = r.repeatIntervalSeconds, intervalEnabledOverride {
                 HStack {
-                    Text("间隔 \(humanDuration(interval))，重复 1 次")
+                    Text("间隔 \(humanDuration(interval))，到点后持续提醒")
                         .font(.system(size: 11))
                         .foregroundStyle(AppPalette.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal, 14)
+                .padding(.top, 4)
+                .padding(.bottom, 10)
+            } else if !intervalEnabledOverride {
+                HStack {
+                    Text("已关闭，提交后不再循环提醒")
+                        .font(.system(size: 11))
+                        .foregroundStyle(AppPalette.secondary.opacity(0.7))
                     Spacer()
                 }
                 .padding(.horizontal, 14)
@@ -253,7 +290,14 @@ struct AddTodoView: View {
 
     private func updateParseResult() {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        parseResult = trimmed.isEmpty ? nil : NlpParser.parse(trimmed)
+        let oldHadInterval = parseResult?.repeatIntervalSeconds != nil
+        let new = trimmed.isEmpty ? nil : NlpParser.parse(trimmed)
+        // 用户每次重新输入出现间隔关键词时，把 override 重置为 ON，
+        // 避免之前关掉过又添了新文本却怎么改都打不开的"卡死"体验。
+        if let r = new, r.repeatIntervalSeconds != nil, !oldHadInterval {
+            intervalEnabledOverride = true
+        }
+        parseResult = new
     }
 
     private func hasMeaningfulFields(_ r: TodoParseResult) -> Bool {
@@ -269,7 +313,9 @@ struct AddTodoView: View {
         let defaultNotifyMin = defaults.integer(forKey: AppSettingsKeys.defaultNotifyOffsetMinutes)
         let defaultIntervalMin = defaults.integer(forKey: AppSettingsKeys.defaultRepeatIntervalMinutes)
         let notifyOffsetSeconds = r.notifyOffsetSeconds > 0 ? r.notifyOffsetSeconds : defaultNotifyMin * 60
-        let repeatIntervalSeconds: Int? = r.repeatIntervalSeconds ?? (defaultIntervalMin > 0 ? defaultIntervalMin * 60 : nil)
+        // 用户在面板里关掉间隔开关时强制丢弃间隔信息（包含解析结果和设置项默认值）
+        let parsedInterval: Int? = r.repeatIntervalSeconds ?? (defaultIntervalMin > 0 ? defaultIntervalMin * 60 : nil)
+        let repeatIntervalSeconds: Int? = intervalEnabledOverride ? parsedInterval : nil
 
         let todo = Todo(
             title: r.title,

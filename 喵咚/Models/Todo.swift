@@ -8,7 +8,9 @@ import SwiftData
 
 @Model
 final class Todo {
-    @Attribute(.unique) var id: UUID
+    // 注意：不能用 @Attribute(.unique) —— CloudKit 同步不支持 unique 约束。
+    // 业务侧靠 UUID 自身的随机性保证唯一即可。
+    var id: UUID
     var title: String
     var notes: String?
 
@@ -109,5 +111,21 @@ extension Todo {
         isCompleted = false
         completedAt = nil
         updatedAt = Date()
+    }
+
+    /// 未完成且 dueDate 已跨日（昨天及更早才算过期；当天即使超时也仍属"今日任务"）
+    /// 设计意图：刚到提醒时间不能立刻把任务踢到"已过期"，提醒弹框还在用户面前
+    /// 就归到过期是反直觉的。同时，snooze 到未来的任务永远不算过期。
+    var isExpired: Bool {
+        guard !isCompleted else { return false }
+        // 还在 snooze 中 → 任务被推到了未来，不算过期
+        if let snooze = snoozeUntil, snooze > Date() { return false }
+
+        let todayStart = Calendar.current.startOfDay(for: Date())
+        guard let due = dueDate else {
+            // 无截止时间：看创建日期是否早于今天零点
+            return createdAt < todayStart
+        }
+        return due < todayStart
     }
 }

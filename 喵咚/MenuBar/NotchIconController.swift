@@ -16,6 +16,7 @@
 
 import AppKit
 import SwiftUI
+import SwiftData
 
 @MainActor
 final class NotchIconController: NSObject {
@@ -26,10 +27,14 @@ final class NotchIconController: NSObject {
     private var viewModel: NotchIslandViewModel?
 
     private var screenObserver: NSObjectProtocol?
+    private var spaceObserver: NSObjectProtocol?
     private var globalMouseMonitor: Any?
     private var localMouseMonitor: Any?
     private var globalClickMonitor: Any?
     private var localClickMonitor: Any?
+    private var keyboardMonitor: Any?
+
+    private var modelContainer: ModelContainer?
 
     private var currentScreen: NSScreen?
 
@@ -42,7 +47,8 @@ final class NotchIconController: NSObject {
 
     // MARK: - 公共 API
 
-    func setup<Content: View>(rootView: Content) {
+    func setup<Content: View>(rootView: Content, modelContainer: ModelContainer? = nil) {
+        self.modelContainer = modelContainer
         teardown()
 
         guard let screen = NSScreen.notchPreferred else { return }
@@ -67,16 +73,23 @@ final class NotchIconController: NSObject {
         )
         self.panel = panel
 
-        let islandRoot = AnyView(
-            NotchIslandView(viewModel: viewModel) {
+        let island = NotchIslandView(viewModel: viewModel) {
                 AnyView(rootView)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .background(Color.clear)
-        )
+
+        let islandRoot = if let modelContainer {
+            AnyView(island.modelContainer(modelContainer))
+        } else {
+            AnyView(island)
+        }
         let hosting = NSHostingController(rootView: islandRoot)
+        // wantsLayer = true 之后 layer 才存在；显式清空 isOpaque 和 backgroundColor
+        // 防止透明 NSPanel 在某些 macOS 版本上出现白色闪烁或渲染残影。
         hosting.view.wantsLayer = true
-        hosting.view.layer?.backgroundColor = NSColor.clear.cgColor
+        hosting.view.layer?.isOpaque = false
+        hosting.view.layer?.backgroundColor = CGColor.clear
         self.hostingController = hosting
 
         panel.contentViewController = hosting
@@ -92,6 +105,10 @@ final class NotchIconController: NSObject {
         if let screenObserver {
             NotificationCenter.default.removeObserver(screenObserver)
             self.screenObserver = nil
+        }
+        if let spaceObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(spaceObserver)
+            self.spaceObserver = nil
         }
         panel?.orderOut(nil)
         panel = nil
@@ -133,8 +150,21 @@ final class NotchIconController: NSObject {
     // MARK: - 屏幕变化（外接屏插拔/分辨率切换）
 
     private func installScreenObserver() {
+        // 外接屏插拔 / 分辨率切换
         screenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.reposition() }
+        }
+
+        // 切换 Mission Control / Spaces 时强制归位。
+        // macOS 在 Space 切换期间有时会将 NSPanel 向下偏移一个状态栏高度（~38pt），
+        // 即使 collectionBehavior 包含 .stationary 也无法完全阻止。
+        // 在 activeSpaceDidChange 回调里重新 setFrame 可以把 panel 拉回正确位置。
+        spaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
@@ -188,16 +218,32 @@ final class NotchIconController: NSObject {
             }
             return event
         }
+
+        // Cmd+N：.nonactivatingPanel 永远不是 key window，SwiftUI .keyboardShortcut 不触发，
+        // 需要在本地事件监听里手动拦截。面板展开时消费事件，闭合时放行。
+        keyboardMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self,
+                  self.viewModel?.status == .opened,
+                  event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+                  event.charactersIgnoringModifiers == "n"
+            else { return event }
+            Task { @MainActor [weak self] in
+                guard let container = self?.modelContainer else { return }
+                AddTodoWindowController.shared.show(modelContainer: container)
+            }
+            return nil  // 消费掉，不再向下传递
+        }
     }
 
     private func removeEventMonitors() {
-        for monitor in [globalMouseMonitor, localMouseMonitor, globalClickMonitor, localClickMonitor] {
+        for monitor in [globalMouseMonitor, localMouseMonitor, globalClickMonitor, localClickMonitor, keyboardMonitor] {
             if let monitor { NSEvent.removeMonitor(monitor) }
         }
         globalMouseMonitor = nil
         localMouseMonitor = nil
         globalClickMonitor = nil
         localClickMonitor = nil
+        keyboardMonitor = nil
     }
 
     private func handleMouseMoved(_ event: NSEvent) {

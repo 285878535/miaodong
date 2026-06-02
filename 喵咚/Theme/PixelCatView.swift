@@ -42,9 +42,9 @@ struct PixelCatView: View {
     private let rows = 16
 
     var body: some View {
-        let canvas = TimelineView(.animation(minimumInterval: 0.35, paused: false)) { ctx in
+        let canvas = TimelineView(.animation(minimumInterval: 0.70, paused: false)) { ctx in
             Canvas { context, _ in
-                draw(in: context, time: ctx.date.timeIntervalSinceReferenceDate)
+                draw(in: context, time: ctx.date.timeIntervalSinceReferenceDate * 0.5)
             }
         }
         .frame(width: pixel * CGFloat(cols), height: pixel * CGFloat(rows))

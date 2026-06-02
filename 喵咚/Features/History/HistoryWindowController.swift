@@ -36,6 +36,8 @@ final class HistoryWindowController: NSObject, NSWindowDelegate {
         win.titlebarAppearsTransparent = true
         win.titleVisibility = .hidden
         win.isReleasedWhenClosed = false
+        win.level = .screenSaver
+        win.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         win.center()
         win.delegate = self
         // 背景与 SwiftUI 米色一致，避免毛玻璃灰区
@@ -49,6 +51,7 @@ final class HistoryWindowController: NSObject, NSWindowDelegate {
         win.contentViewController = hc
 
         win.makeKeyAndOrderFront(nil)
+        win.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
         self.window = win
     }

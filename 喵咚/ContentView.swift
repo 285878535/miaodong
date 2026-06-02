@@ -13,8 +13,16 @@
 import SwiftUI
 import SwiftData
 import Combine
+import AppKit
 
 struct ContentView: View {
+    /// true = 刘海岛模式（顶角直角 + 黑色衔接条），false = 悬浮 / 菜单栏模式
+    let attachedToNotch: Bool
+
+    init(attachedToNotch: Bool = true) {
+        self.attachedToNotch = attachedToNotch
+    }
+
     @Query(
         filter: #Predicate<Todo> { !$0.isCompleted },
         sort: [SortDescriptor(\Todo.dueDate, order: .forward)]
@@ -28,13 +36,27 @@ struct ContentView: View {
     private var completedTodos: [Todo]
 
     @Environment(\.modelContext) private var context
+    // 监听主题色变化以触发重渲染（AppPalette.accent 是 static var，需要靠此驱动刷新）
+    @AppStorage(AppSettingsKeys.accentColor) private var _accentColorId: String = ThemeColor.purple.rawValue
+    // 监听猫成长事件（升级），自动弹庆祝 toast
+    @ObservedObject private var growth = CatGrowth.shared
+
+    /// 当天及未来的未完成任务（排除已过期）
+    private var activeTodos: [Todo] { todos.filter { !$0.isExpired } }
+
+    /// 昨天及更早的未完成任务
+    private var expiredTodos: [Todo] { todos.filter { $0.isExpired } }
 
     @State private var showCompleted: Bool = false
+    @State private var showExpired: Bool = false
     @State private var hoveredHistoryButton: Bool = false
     @State private var hoveredSettingsButton: Bool = false
+    @State private var hoveredPomodoroButton: Bool = false
     @State private var hoveredAllDone: Bool = false
     @State private var hoveredHeader: Bool = false
     @State private var nowTick: Date = .init()
+    // 弹窗出现时边框淡入（参考 codexisland IslandRootView strokeBorder 动效）
+    @State private var borderVisible: Bool = false
 
     /// 完成事件触发器：header 小猫跳起来
     @State private var catBounce: CGFloat = 0
@@ -43,12 +65,15 @@ struct ContentView: View {
     /// 最近一次用户互动时间（hover / click），用来判定 idle
     @State private var lastInteraction: Date = .init()
 
+    /// 底部快速新建输入框
+
     /// 多久没动 = 进入睡觉态
     private let idleThreshold: TimeInterval = 30
 
     /// 设计常量
     private let headerHeight: CGFloat = 128
-    private let topCornerRadius: CGFloat = 0
+    /// 刘海模式：顶角直角（与刘海无缝衔接）；其他模式：与底部同圆角
+    private var topCornerRadius: CGFloat { attachedToNotch ? 0 : bottomCornerRadius }
     private let bottomCornerRadius: CGFloat = 20
 
     var body: some View {
@@ -56,12 +81,47 @@ struct ContentView: View {
             .onReceive(Timer.publish(every: 5, on: .main, in: .common).autoconnect()) { tick in
                 nowTick = tick
             }
+            .onAppear {
+                if !expiredTodos.isEmpty { showExpired = true }
+            }
+            .onChange(of: expiredTodos.isEmpty) { _, isEmpty in
+                if !isEmpty { showExpired = true }
+            }
+            .onChange(of: growth.pendingLevelUp) { _, newLevel in
+                guard let newLevel else { return }
+                CompletionToastController.shared.show(
+                    title: "🎉 升级啦！Lv \(newLevel)",
+                    subtitle: "你的猫又强了一点点～"
+                )
+                triggerCatCelebration()
+                // 清掉 pending 标记
+                Task { @MainActor in
+                    growth.pendingLevelUp = nil
+                }
+            }
     }
 
     private var mainView: some View {
         let bodyTop = headerHeight - 18
 
-        return ZStack(alignment: .top) {
+        // 主内容区（header + body）单独做 clipShape —— 与 addTrigger 完全隔离在不同渲染层。
+        // 不能把 addTrigger 放在同一个 clipShape/overlay 链里：
+        //   透明 NSPanel 使用 CALayer 遮罩时，SwiftUI 的 dirty-rect 优化
+        //   有时会在局部重绘（timer tick / hover state）里跳过 overlay 层，
+        //   导致输入框间歇消失；切换 Spaces 强制全量重绘才又出现。
+        //   解决方法：让 addTrigger 成为外层 ZStack 的独立子视图，
+        //   拥有自己的渲染层，不受内容区 clipShape 的合并影响。
+        let mainContent = ZStack(alignment: .top) {
+            // 悬浮 / 菜单栏模式：在所有层之下垫一块不透明的浅色底，给 header 的
+            // `.background(.ultraThinMaterial)` 一个可采样的浅色 backdrop。
+            // 否则透明 NSPanel 下方就是用户的深色壁纸，材料层会把壁纸的暗色
+            // 采样出来，顶部 accentSoft 的 .screen blend 也救不回亮色，最终看到的
+            // 就是顶端那条又深又"透明"的黑带。刘海模式（attachedToNotch=true）
+            // 故意要这种与屏幕深色融合的效果，所以保留原行为不垫底。
+            if !attachedToNotch {
+                AppPalette.accentSoft
+                    .frame(width: 360, height: 560)
+            }
             body_
                 .frame(width: 360, height: 560 - bodyTop)
                 .offset(y: bodyTop)
@@ -81,7 +141,39 @@ struct ContentView: View {
         .shadow(color: .black.opacity(0.32), radius: 16, x: 0, y: 8)
         .shadow(color: .black.opacity(0.18), radius: 3,  x: 0, y: 1)
         .shadow(color: AppPalette.headerCenterGlow.opacity(0.36), radius: 34, x: 0, y: 1)
+        // 弹窗边框：静态细线 + 跑马灯光效（参考 codexisland LoadingSweep）
+        .overlay(
+            UnevenRoundedRectangle(
+                topLeadingRadius: topCornerRadius,
+                bottomLeadingRadius: bottomCornerRadius,
+                bottomTrailingRadius: bottomCornerRadius,
+                topTrailingRadius: topCornerRadius,
+                style: .continuous
+            )
+            .strokeBorder(.white.opacity(borderVisible ? 0.12 : 0), lineWidth: 0.5)
+            .animation(.easeInOut(duration: 0.45), value: borderVisible)
+            .allowsHitTesting(false)
+        )
+        .overlay(
+            SweepBorder(
+                active: borderVisible,
+                tint: AppPalette.accent,
+                topRadius: topCornerRadius,
+                bottomRadius: bottomCornerRadius
+            )
+            .allowsHitTesting(false)
+        )
+
+        return ZStack(alignment: .bottom) {
+            mainContent
+            // addTrigger 是外层 ZStack 的独立子视图，渲染层完全独立，
+            // 不会被 clipShape 合并也不会被 dirty-rect 优化跳过。
+            addTrigger
+        }
+        .frame(width: 360, height: 560)
         .preferredColorScheme(.light)
+        .onAppear { borderVisible = true }
+        .onDisappear { borderVisible = false }
     }
 
     // MARK: - Header（夜空多层）
@@ -91,7 +183,8 @@ struct ContentView: View {
             headerBackground
             CloudLayer()
             HeaderStarsAndNoise()
-            screenAttachmentBand
+             // 刘海模式才需要顶部黑色衔接条（与物理刘海融合），悬浮/菜单栏模式隐藏
+            if attachedToNotch { screenAttachmentBand }
 
             // 中央：小猫窝 + 小猫
             VStack(spacing: 0) {
@@ -107,13 +200,14 @@ struct ContentView: View {
                 VStack(spacing: 0) {
                     Spacer().frame(height: 2)
                     HStack(spacing: 6) {
+                        pomodoroButton
                         historyButton
                         settingsButton
                     }
                 }
             }
             .padding(.horizontal, 14)
-            .padding(.top, 38)
+            .padding(.top, 46)
         }
         .frame(height: headerHeight)
         .background(.ultraThinMaterial.opacity(0.38))
@@ -153,6 +247,21 @@ struct ContentView: View {
                 startPoint: .top,
                 endPoint: .center
             )
+
+            // 非刘海模式（悬浮/菜单栏）：用 accentSoft（浅薰衣草）screen 叠加顶部，
+            // 把最深的纯色 band 提亮成明亮有色调的渐变，消除圆角弹窗顶端的突兀深色条。
+            if !attachedToNotch {
+                LinearGradient(
+                    stops: [
+                        .init(color: AppPalette.accentSoft,               location: 0.00),
+                        .init(color: AppPalette.accentSoft.opacity(0.60),  location: 0.20),
+                        .init(color: AppPalette.accentSoft.opacity(0.00),  location: 0.55),
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .blendMode(.screen)
+            }
         }
     }
 
@@ -213,18 +322,14 @@ struct ContentView: View {
                 .blur(radius: 8)
                 .offset(y: 30)
 
-            // 猫窝主体（更大、更深）
-            CatBowlView(width: 138, height: 45)
-                .offset(y: 20)
-
-            // 小猫本体：pixel=3，下方近 1/2 被 mask 遮掉 —— 真正"坐进窝里"
-            PixelCatView(pixel: 3, mood: catMoodResolved, glow: true)
-                .mask(catMask)
+            CatFrameAnimation(prefix: "focus", frameCount: 8)
+                .frame(width: 64, height: 54)
                 .shadow(color: .black.opacity(0.28), radius: 5, x: 0, y: 5)
-                .offset(y: catBounce + 16)
-                .animation(.spring(response: 0.32, dampingFraction: 0.55), value: catBounce)
+                .shadow(color: AppPalette.headerCenterGlow.opacity(0.34), radius: 10, x: 0, y: 0)
+                .offset(y: catBounce + 14)
+                .animation(.spring(response: 0.64, dampingFraction: 0.55), value: catBounce)
                 .overlay(alignment: .top) {
-                    if catMoodResolved == .sleep && (isIdle || (todos.isEmpty && !completedTodos.isEmpty)) {
+                    if catMoodResolved == .sleep && (isIdle || (activeTodos.isEmpty && !completedTodos.isEmpty)) {
                         ZzzFloater()
                             .offset(x: 22, y: -24)
                     }
@@ -265,6 +370,18 @@ struct ContentView: View {
             Text(subGreeting)
                 .font(.system(size: 11))
                 .foregroundStyle(AppPalette.headerSecondary)
+        }
+    }
+
+    private var pomodoroButton: some View {
+        bubbleButton(
+            systemName: "target",
+            iconSize: 13,
+            hovered: hoveredPomodoroButton,
+            onHover: { hoveredPomodoroButton = $0; if $0 { recordInteraction() } },
+            help: "专注模式（番茄钟）"
+        ) {
+            PomodoroController.shared.show()
         }
     }
 
@@ -322,7 +439,7 @@ struct ContentView: View {
         }
         .buttonStyle(.plain)
         .onHover(perform: onHover)
-        .animation(.easeOut(duration: 0.15), value: hovered)
+        .animation(.easeOut(duration: 0.30), value: hovered)
         .help(help)
     }
 
@@ -332,7 +449,7 @@ struct ContentView: View {
     }
 
     private var subGreeting: String {
-        if todos.isEmpty {
+        if activeTodos.isEmpty {
             return completedTodos.isEmpty ? "今天还没有待办喵～" : "今天也是元气满满的一天呢！"
         }
         return "今天也是元气满满的一天呢！"
@@ -353,8 +470,8 @@ struct ContentView: View {
     private var catMoodResolved: CatMood {
         if let until = cheerUntil, until > Date() { return .cheer }
         if isIdle { return .sleep }
-        if todos.isEmpty && !completedTodos.isEmpty { return .sleep }
-        if todos.isEmpty { return .idle }
+        if activeTodos.isEmpty && !completedTodos.isEmpty { return .sleep }
+        if activeTodos.isEmpty { return .idle }
         return .wag
     }
 
@@ -375,15 +492,13 @@ struct ContentView: View {
             .frame(height: 96)
             VStack(spacing: 0) {
                 companionZone
-                if todos.isEmpty && completedTodos.isEmpty {
+                if activeTodos.isEmpty && expiredTodos.isEmpty && completedTodos.isEmpty {
                     emptyState
                 } else {
                     listSection
                 }
             }
-            .padding(.bottom, 76)
-            addTrigger
-                .frame(maxHeight: .infinity, alignment: .bottom)
+            .padding(.bottom, 68)
             // 头部 → 主体的柔和过渡（紫色阴影渐隐到透明）
             HeaderToBodyFade(height: 72)
                 .offset(y: -36)
@@ -395,7 +510,7 @@ struct ContentView: View {
 
     private var companionZone: some View {
         CompanionZone(
-            openCount: todos.count,
+            openCount: activeTodos.count,
             doneCount: completedTodos.filter { isToday($0.completedAt) }.count,
             companionDays: CompanionDays.days()
         )
@@ -425,19 +540,34 @@ struct ContentView: View {
     private var listSection: some View {
         ScrollView {
             VStack(spacing: 0) {
-                if !todos.isEmpty {
+                if !activeTodos.isEmpty {
                     sectionHeader
                     LazyVStack(spacing: 10) {
-                        ForEach(todos) { todo in
+                        ForEach(activeTodos) { todo in
                             todoCard(for: todo)
                         }
                     }
                     .padding(.horizontal, 14)
                     .padding(.bottom, 8)
-                } else if !completedTodos.isEmpty {
+                } else if !expiredTodos.isEmpty || !completedTodos.isEmpty {
                     allDoneCheer
                 }
 
+                // 已过期区段
+                if !expiredTodos.isEmpty {
+                    expiredHeader
+                    if showExpired {
+                        LazyVStack(spacing: 8) {
+                            ForEach(expiredTodos) { todo in
+                                todoCard(for: todo)
+                            }
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.bottom, 8)
+                    }
+                }
+
+                // 已完成区段
                 if !completedTodos.isEmpty {
                     completedHeader
                     if showCompleted {
@@ -450,6 +580,9 @@ struct ContentView: View {
                         .padding(.bottom, 8)
                     }
                 }
+
+                // 确保最后一条不被 addTrigger 遮挡
+                Color.clear.frame(height: 8)
             }
         }
         .scrollIndicators(.hidden)
@@ -462,7 +595,7 @@ struct ContentView: View {
             Text("今日待办")
                 .font(.system(size: 13, weight: .bold))
                 .foregroundStyle(AppPalette.primary)
-            Text("\(todos.count)")
+            Text("\(activeTodos.count)")
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
                 .foregroundStyle(AppPalette.secondary.opacity(0.85))
                 .monospacedDigit()
@@ -504,9 +637,34 @@ struct ContentView: View {
         }
     }
 
+    private var expiredHeader: some View {
+        Button {
+            withAnimation(.easeOut(duration: 0.36)) { showExpired.toggle() }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: showExpired ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Color(red: 0.85, green: 0.38, blue: 0.22).opacity(0.7))
+                    .frame(width: 10)
+                Text("已过期")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color(red: 0.85, green: 0.38, blue: 0.22))
+                Text("\(expiredTodos.count)")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color(red: 0.85, green: 0.38, blue: 0.22).opacity(0.7))
+                    .monospacedDigit()
+                Spacer()
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 10)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
     private var completedHeader: some View {
         Button {
-            withAnimation(.easeOut(duration: 0.18)) { showCompleted.toggle() }
+            withAnimation(.easeOut(duration: 0.36)) { showCompleted.toggle() }
         } label: {
             HStack(spacing: 5) {
                 Image(systemName: showCompleted ? "chevron.down" : "chevron.right")
@@ -574,19 +732,18 @@ struct ContentView: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(AppPalette.rowCardStroke, lineWidth: 0.5)
+                    .stroke(AppPalette.accent.opacity(0.30), lineWidth: 1.0)
             )
             .shadow(color: AppPalette.rowCardShadowTight, radius: 2, x: 0, y: 1)
             .shadow(color: AppPalette.rowCardShadowSoft, radius: 12, x: 0, y: 5)
             .padding(.horizontal, 14)
-            .padding(.bottom, 14)
+            .padding(.bottom, 10)
             .padding(.top, 6)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .keyboardShortcut("n", modifiers: .command)
     }
-
 
     private func openAddPanel() {
         recordInteraction()
@@ -612,7 +769,9 @@ struct ContentView: View {
             NotificationManager.shared.cancel(todoId: id)
             AlertWindowController.shared.dismiss(id: id)
             CompletionToastController.shared.show(for: todo)
-            if todos.count <= 1 {
+            // 加经验 + 推进 streak
+            CatGrowth.shared.awardTodoCompletion()
+            if activeTodos.count <= 1 {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
                     CompletionToastController.shared.showAllDone()
                 }
@@ -639,13 +798,14 @@ struct ContentView: View {
 
     private func markAllComplete() {
         recordInteraction()
-        guard !todos.isEmpty else { return }
-        for t in todos {
+        guard !activeTodos.isEmpty else { return }
+        for t in activeTodos {
             let id = t.id
             t.markCompleted()
             t.clearSnooze()
             NotificationManager.shared.cancel(todoId: id)
             AlertWindowController.shared.dismiss(id: id)
+            CatGrowth.shared.awardTodoCompletion()
         }
         try? context.save()
         ReminderScheduler.shared.reload()
@@ -737,8 +897,117 @@ private struct TodoCardWrapper<Content: View>: View {
         .shadow(color: hovered ? AppPalette.rowCardHoverGlow : .clear, radius: 16, x: 0, y: 0)
         .scaleEffect(hovered ? 1.012 : 1.0)
         .offset(y: hovered ? -1 : 0)
-        .animation(.easeOut(duration: 0.18), value: hovered)
+        .animation(.easeOut(duration: 0.36), value: hovered)
         .onHover { hovered = $0 }
+    }
+}
+
+private struct AnimatedGIFView: NSViewRepresentable {
+    let resourceName: String
+
+    func makeNSView(context: Context) -> NSImageView {
+        let imageView = NSImageView()
+        imageView.imageScaling = .scaleProportionallyUpOrDown
+        imageView.imageAlignment = .alignCenter
+        imageView.animates = true
+        imageView.canDrawSubviewsIntoLayer = true
+        imageView.image = loadImage()
+        return imageView
+    }
+
+    func updateNSView(_ nsView: NSImageView, context: Context) {
+        if nsView.image == nil {
+            nsView.image = loadImage()
+        }
+        nsView.animates = true
+    }
+
+    private func loadImage() -> NSImage? {
+        if let url = Bundle.main.url(forResource: resourceName, withExtension: "gif") {
+            return NSImage(contentsOf: url)
+        }
+
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Resources")
+            .appendingPathComponent("\(resourceName).gif")
+        return NSImage(contentsOf: sourceURL)
+    }
+}
+
+private struct CatFrameAnimation: View {
+    let prefix: String
+    let frameCount: Int
+
+    @State private var frameIndex = 0
+    private let timer = Timer.publish(every: 0.64, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        Group {
+            if let image = loadFrame(named: "\(prefix)\(frameIndex + 1)") {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.none)
+                    .scaledToFit()
+            }
+        }
+        .onReceive(timer) { _ in
+            frameIndex = (frameIndex + 1) % frameCount
+        }
+    }
+
+    private func loadFrame(named name: String) -> NSImage? {
+        if let url = Bundle.main.url(forResource: name, withExtension: "png") {
+            return NSImage(contentsOf: url)
+        }
+
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Resources")
+            .appendingPathComponent("\(name).png")
+        return NSImage(contentsOf: sourceURL)
+    }
+}
+
+// MARK: - 弹窗跑马灯边框（参考 codexisland LoadingSweep）
+//
+// TimelineView 30Hz 驱动 AngularGradient 旋转，形成彗星尾巴扫过边框的效果。
+// 100°/s → 3.6s 一圈，与 codexisland 保持一致。
+private struct SweepBorder: View {
+    let active: Bool
+    let tint: Color
+    let topRadius: CGFloat
+    let bottomRadius: CGFloat
+
+    var body: some View {
+        if active {
+            TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+                let t = context.date.timeIntervalSinceReferenceDate
+                let rotation = (t * 100).truncatingRemainder(dividingBy: 360)
+                UnevenRoundedRectangle(
+                    topLeadingRadius: topRadius,
+                    bottomLeadingRadius: bottomRadius,
+                    bottomTrailingRadius: bottomRadius,
+                    topTrailingRadius: topRadius,
+                    style: .continuous
+                )
+                .stroke(
+                    AngularGradient(
+                        gradient: Gradient(stops: [
+                            .init(color: .clear,              location: 0.00),
+                            .init(color: tint.opacity(0.0),   location: 0.55),
+                            .init(color: tint,                location: 0.78),
+                            .init(color: .white.opacity(0.95), location: 0.92),
+                            .init(color: tint.opacity(0.0),   location: 1.00),
+                        ]),
+                        center: .center,
+                        angle: .degrees(rotation)
+                    ),
+                    lineWidth: 1.5
+                )
+                .blur(radius: 2)
+            }
+        }
     }
 }
 

@@ -13,6 +13,7 @@ struct HistoryView: View {
     private var todos: [Todo]
 
     @Environment(\.modelContext) private var context
+    @AppStorage(AppSettingsKeys.accentColor) private var _accentColorId: String = ThemeColor.purple.rawValue
 
     @State private var selection: Set<UUID> = []
     @State private var showConfirmDelete: Bool = false
@@ -125,6 +126,11 @@ struct HistoryView: View {
         .disabled(selection.isEmpty)
     }
 
+    // MARK: - 分组
+
+    private var expiredTodos: [Todo] { todos.filter { $0.isExpired } }
+    private var completedTodos: [Todo] { todos.filter { $0.isCompleted } }
+
     // MARK: - 内容区
 
     @ViewBuilder
@@ -138,17 +144,48 @@ struct HistoryView: View {
 
     private var list: some View {
         ScrollView {
-            LazyVStack(spacing: 0) {
-                ForEach(Array(todos.enumerated()), id: \.element.id) { idx, todo in
-                    HistoryRow(
-                        todo: todo,
-                        isSelected: selection.contains(todo.id),
-                        onToggleSelect: { toggleSelect(todo.id) }
+            LazyVStack(spacing: 0, pinnedViews: []) {
+                // 已过期分区
+                if !expiredTodos.isEmpty {
+                    sectionHeader(
+                        title: "已过期",
+                        count: expiredTodos.count,
+                        fg: Color(red: 0.85, green: 0.38, blue: 0.22),
+                        bg: Color(red: 0.85, green: 0.38, blue: 0.22).opacity(0.09)
                     )
-                    if idx < todos.count - 1 {
-                        Divider()
-                            .background(AppPalette.separator.opacity(0.5))
-                            .padding(.leading, 50)
+                    ForEach(Array(expiredTodos.enumerated()), id: \.element.id) { idx, todo in
+                        HistoryRow(
+                            todo: todo,
+                            isSelected: selection.contains(todo.id),
+                            onToggleSelect: { toggleSelect(todo.id) }
+                        )
+                        if idx < expiredTodos.count - 1 {
+                            Divider()
+                                .background(AppPalette.separator.opacity(0.5))
+                                .padding(.leading, 50)
+                        }
+                    }
+                }
+
+                // 已完成分区
+                if !completedTodos.isEmpty {
+                    sectionHeader(
+                        title: "已完成",
+                        count: completedTodos.count,
+                        fg: Color(red: 0.24, green: 0.62, blue: 0.34),
+                        bg: Color(red: 0.36, green: 0.78, blue: 0.45).opacity(0.09)
+                    )
+                    ForEach(Array(completedTodos.enumerated()), id: \.element.id) { idx, todo in
+                        HistoryRow(
+                            todo: todo,
+                            isSelected: selection.contains(todo.id),
+                            onToggleSelect: { toggleSelect(todo.id) }
+                        )
+                        if idx < completedTodos.count - 1 {
+                            Divider()
+                                .background(AppPalette.separator.opacity(0.5))
+                                .padding(.leading, 50)
+                        }
                     }
                 }
             }
@@ -158,6 +195,25 @@ struct HistoryView: View {
         .shadow(color: AppPalette.primary.opacity(0.05), radius: 6, x: 0, y: 2)
         .padding(.horizontal, 16)
         .padding(.bottom, 16)
+    }
+
+    private func sectionHeader(title: String, count: Int, fg: Color, bg: Color) -> some View {
+        HStack(spacing: 6) {
+            Text(title)
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(fg)
+            Text("\(count)")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(fg.opacity(0.8))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 1)
+                .background(bg)
+                .clipShape(Capsule())
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(bg.opacity(0.6))
     }
 
     private var emptyState: some View {
@@ -267,6 +323,10 @@ private struct HistoryRow: View {
             badge(text: "已完成",
                   fg: Color(red: 0.24, green: 0.62, blue: 0.34),
                   bg: Color(red: 0.36, green: 0.78, blue: 0.45).opacity(0.18))
+        } else if todo.isExpired {
+            badge(text: "已过期",
+                  fg: Color(red: 0.85, green: 0.38, blue: 0.22),
+                  bg: Color(red: 0.85, green: 0.38, blue: 0.22).opacity(0.12))
         } else {
             badge(text: "待办",
                   fg: AppPalette.accent,

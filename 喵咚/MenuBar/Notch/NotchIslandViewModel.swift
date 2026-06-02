@@ -39,7 +39,7 @@ final class NotchIslandViewModel: ObservableObject {
 
     /// 闭合态的可视宽度（约等于真刘海宽 + 一点 padding，便于命中）
     var closedWidth: CGFloat {
-        max(geometry.deviceNotchRect.width + 8, 160)
+        max(geometry.deviceNotchRect.width + 82, 236)
     }
 
     /// 闭合态的视觉尺寸
@@ -119,7 +119,7 @@ final class NotchIslandViewModel: ObservableObject {
 
     /// 点是否落在闭合刘海的"hover 触发"区域
     func isPointInNotch(_ point: CGPoint) -> Bool {
-        geometry.isPointInNotch(point)
+        geometry.isPointInClosedIsland(point, size: closedSize)
     }
 
     /// 点是否落在展开面板内

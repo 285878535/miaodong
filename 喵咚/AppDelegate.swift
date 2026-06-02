@@ -22,7 +22,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             fatalError("ModelContainer 初始化失败: \(error)")
         }
 
-        // 2) 调度器 + 弹窗
+        // 2) 提醒系统：调度器 + 系统通知 + 应用内弹窗
+        //    NotificationManager 单例 init 时会自动挂上 UNUserNotificationCenter delegate
+        _ = NotificationManager.shared
+        NotificationManager.shared.requestAuthorizationIfNeeded()
+
         ReminderScheduler.shared.attach(container: container)
         ReminderScheduler.shared.onFire = { [weak self] todo in
             guard let self else { return }
@@ -33,26 +37,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     t.markCompleted()
                     t.clearSnooze()
                     try? ctx.save()
-                    NotificationManager.shared.cancel(todoId: t.id)
+                    // ReminderScheduler.cancel 会同时撤销系统通知
+                    ReminderScheduler.shared.cancel(todoId: t.id)
                     ReminderScheduler.shared.reload()
                 },
                 onSnooze: { t, seconds in
                     t.snooze(for: seconds)
                     try? ctx.save()
+                    // snooze 重排：先撤销系统通知，reload 内部会按新 notifyDate 重新 schedule
                     ReminderScheduler.shared.reload()
                 },
-                onDismiss: { _ in
+                onDismiss: { t in
+                    t.clearSnooze()
+                    try? ctx.save()
                     // 间隔重复继续；首次提醒已消费
                 }
             )
         }
-        NotificationManager.shared.requestAuthorizationIfNeeded()
         ReminderScheduler.shared.reload()
 
-        // 3) 按设置项装载图标显示模式
-        applyIconMode()
+        // 3) 全局快速捕获（⌥Space 默认）
+        QuickCaptureController.shared.attach(modelContainer: container)
+        if UserDefaults.standard.object(forKey: AppSettingsKeys.quickCaptureEnabled) as? Bool ?? true {
+            GlobalHotkeyManager.shared.onTriggered = {
+                QuickCaptureController.shared.toggle()
+            }
+            GlobalHotkeyManager.shared.registerFromUserDefaults()
+        }
 
-        // 4) 监听运行时切换
+        // 4) 按设置项装载图标显示模式 + 监听运行时切换
+        applyIconMode()
         modeChangeObserver = NotificationCenter.default.addObserver(
             forName: .iconDisplayModeDidChange,
             object: nil,
@@ -60,6 +74,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in self?.applyIconMode() }
         }
+
+        // 5) 后台异步检查更新（有新版本弹 Alert）
+        UpdateChecker.shared.checkAndAlertIfNeeded()
     }
 
     deinit {
@@ -82,19 +99,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         currentIconMode = mode
 
         // 切换前先关掉所有其他模式（避免叠加）
-        let root = ContentView().modelContainer(container)
         switch mode {
         case .menuBar:
             NotchIconController.shared.teardown()
             FloatingIconController.shared.teardown()
-            MenuBarController.shared.setup(rootView: root)
+            let root = ContentView(attachedToNotch: false).modelContainer(container)
+            MenuBarController.shared.setup(rootView: root, modelContainer: container)
         case .notch:
             MenuBarController.shared.teardown()
             FloatingIconController.shared.teardown()
-            NotchIconController.shared.setup(rootView: root)
+            let hasPhysicalNotch = NSScreen.notchPreferred?.notchMetrics.hasPhysicalNotch ?? false
+            let root = ContentView(attachedToNotch: hasPhysicalNotch).modelContainer(container)
+            NotchIconController.shared.setup(rootView: root, modelContainer: container)
         case .floating:
             MenuBarController.shared.teardown()
             NotchIconController.shared.teardown()
+            let root = ContentView(attachedToNotch: false).modelContainer(container)
             FloatingIconController.shared.setup(rootView: root)
         }
     }

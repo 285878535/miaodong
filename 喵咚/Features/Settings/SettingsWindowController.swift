@@ -33,6 +33,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         win.titlebarAppearsTransparent = true
         win.titleVisibility = .hidden
         win.isReleasedWhenClosed = false
+        win.level = .screenSaver
+        win.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         win.center()
         win.delegate = self
         // 背景与 SwiftUI 背景色匹配

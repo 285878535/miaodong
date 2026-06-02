@@ -55,7 +55,8 @@ final class AddTodoWindowController: NSObject, NSWindowDelegate {
         )
         panel.titlebarAppearsTransparent = true
         panel.titleVisibility = .hidden
-        panel.level = .floating
+        panel.level = .screenSaver
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.center()
         panel.isReleasedWhenClosed = false
         panel.delegate = self
@@ -107,6 +108,7 @@ final class AddTodoWindowController: NSObject, NSWindowDelegate {
         hc.view.layer?.backgroundColor = NSColor.clear.cgColor
         panel.contentViewController = hc
         panel.makeKeyAndOrderFront(nil)
+        panel.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
         self.window = panel
     }

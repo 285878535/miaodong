@@ -39,6 +39,17 @@ struct NotchGeometry: Equatable, Sendable {
         notchScreenRect.insetBy(dx: -10, dy: -5).contains(point)
     }
 
+    func isPointInClosedIsland(_ point: CGPoint, size: CGSize) -> Bool {
+        CGRect(
+            x: screenRect.midX - size.width / 2,
+            y: screenRect.maxY - size.height,
+            width: size.width,
+            height: size.height
+        )
+        .insetBy(dx: -10, dy: -5)
+        .contains(point)
+    }
+
     func isPointInOpenedPanel(_ point: CGPoint, size: CGSize) -> Bool {
         openedScreenRect(for: size).contains(point)
     }

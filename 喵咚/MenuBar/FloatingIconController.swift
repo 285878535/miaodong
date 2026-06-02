@@ -10,15 +10,21 @@
 
 import AppKit
 import SwiftUI
+import Combine
 
 @MainActor
 final class FloatingIconController: NSObject {
     static let shared = FloatingIconController()
 
     private var panel: NSPanel?
-    private var popover: NSPopover?
+    /// 用透明 NSPanel 代替 NSPopover —— NSPopover 自带系统箭头和灰色背景 chrome，
+    /// 无法通过 ContentView 层修复；手动定位 NSPanel 才能实现零系统背景。
+    private var contentPanel: NSPanel?
+    private var outsideClickMonitor: Any?
 
-    private static let panelSize: CGFloat = 48
+    private static let panelSize: CGFloat = 76
+    private static let contentW: CGFloat = 360
+    private static let contentH: CGFloat = 560
 
     private override init() {
         super.init()
@@ -30,13 +36,15 @@ final class FloatingIconController: NSObject {
         teardown()
 
         let size = Self.panelSize
+
+        // ── 悬浮图标面板 ──
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: size, height: size),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
-        panel.level = .statusBar              // 浮在普通窗口之上
+        panel.level = .statusBar
         panel.isFloatingPanel = true
         panel.hidesOnDeactivate = false
         panel.becomesKeyOnlyIfNeeded = true
@@ -47,7 +55,7 @@ final class FloatingIconController: NSObject {
         panel.ignoresMouseEvents = false
 
         let iconView = FloatingIconNSView(frame: NSRect(x: 0, y: 0, width: size, height: size))
-        iconView.onClick = { [weak self] in self?.togglePopover() }
+        iconView.onClick = { [weak self] in self?.toggleContent() }
         iconView.onDragEnd = { origin in
             let ud = UserDefaults.standard
             ud.set(Double(origin.x), forKey: AppSettingsKeys.floatingIconX)
@@ -55,67 +63,128 @@ final class FloatingIconController: NSObject {
         }
         panel.contentView = iconView
 
-        // 恢复持久化坐标，没有则给一个默认（屏幕右侧中部）
         let origin = restoredOrigin(panelSize: size)
         panel.setFrameOrigin(origin)
 
-        // Popover —— 复用 ContentView
-        let pop = NSPopover()
-        pop.behavior = .transient
-        pop.animates = true
-        pop.contentSize = NSSize(width: 360, height: 520)
-        let hc = NSHostingController(rootView: rootView)
-        hc.view.wantsLayer = true
-        hc.view.layer?.backgroundColor = NSColor.clear.cgColor
-        pop.contentViewController = hc
+        // ── 内容面板（透明 NSPanel，无箭头无系统背景）──
+        let cp = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: Self.contentW, height: Self.contentH),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        cp.level = .popUpMenu          // 高于 statusBar，确保盖住其他窗口
+        cp.isFloatingPanel = true
+        cp.hidesOnDeactivate = false
+        cp.becomesKeyOnlyIfNeeded = true
+        cp.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        cp.backgroundColor = .clear
+        cp.isOpaque = false
+        cp.hasShadow = false           // ContentView 已有自己的多层阴影
+        cp.ignoresMouseEvents = false
+
+        // ⚠️ 关键：NSPanel + NSHostingController 的组合会把屏幕级 safe-area
+        // （菜单栏 ~25–40pt）透传到 SwiftUI，导致 ContentView 顶部空出一段透明背景。
+        // 仅用 .ignoresSafeArea() / safeAreaRegions = [] 还不够 —— contentViewController
+        // 这条路径在 macOS 上仍会让 hosting view 受窗口 layout margin 影响。
+        // 改成：手动建一个固定 frame 的 NSView 容器 + NSHostingView 子视图，
+        // 显式把 SwiftUI 钉死在 (0,0,360,560)，AppKit 没有任何机会再去插入 inset。
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: Self.contentW, height: Self.contentH))
+        container.wantsLayer = true
+        container.layer?.isOpaque = false
+        container.layer?.backgroundColor = CGColor.clear
+        container.autoresizesSubviews = false
+
+        let hostingView = NSHostingView(rootView: rootView.ignoresSafeArea(.all, edges: .all))
+        hostingView.frame = container.bounds
+        hostingView.autoresizingMask = [.width, .height]
+        hostingView.wantsLayer = true
+        hostingView.layer?.isOpaque = false
+        hostingView.layer?.backgroundColor = CGColor.clear
+        container.addSubview(hostingView)
+
+        cp.contentView = container
 
         panel.orderFrontRegardless()
 
         self.panel = panel
-        self.popover = pop
+        self.contentPanel = cp
     }
 
     func teardown() {
-        if let popover, popover.isShown {
-            popover.performClose(nil)
-        }
+        hideContent()
         panel?.orderOut(nil)
         panel = nil
-        popover = nil
+        contentPanel = nil
     }
 
-    // MARK: - 切换 popover
+    // MARK: - 展开 / 收起
 
-    private func togglePopover() {
-        guard let popover, let panel, let anchor = panel.contentView else { return }
-        if popover.isShown {
-            popover.performClose(nil)
-            return
+    private func toggleContent() {
+        guard let cp = contentPanel else { return }
+        if cp.isVisible {
+            hideContent()
+        } else {
+            showContent()
         }
+    }
+
+    private func showContent() {
+        guard let cp = contentPanel, let panel else { return }
         NSApp.activate(ignoringOtherApps: true)
-        // 优先向下展开；如果离屏幕下边太近，自动转为向上
-        let edge: NSRectEdge = preferredEdge(forAnchor: anchor)
-        popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: edge)
+        cp.setFrameOrigin(contentOrigin(for: panel))
+        cp.orderFrontRegardless()
+        installOutsideClickMonitor()
     }
 
-    private func preferredEdge(forAnchor anchor: NSView) -> NSRectEdge {
-        guard let win = anchor.window, let screen = win.screen ?? NSScreen.main else {
-            return .minY
-        }
-        let winFrame = win.frame
-        let visible = screen.visibleFrame
-        let distanceToBottom = winFrame.minY - visible.minY
-        let distanceToTop = visible.maxY - winFrame.maxY
+    private func hideContent() {
+        contentPanel?.orderOut(nil)
+        removeOutsideClickMonitor()
+    }
 
-        // 弹窗高度约 520，留 24 余量
-        let popoverHeight: CGFloat = 540
-        if distanceToBottom >= popoverHeight {
-            return .minY    // 向下
-        } else if distanceToTop >= popoverHeight {
-            return .maxY    // 向上
+    /// 计算内容面板坐标：优先在图标正下方，空间不足则显示在上方
+    private func contentOrigin(for iconPanel: NSPanel) -> NSPoint {
+        let iconFrame = iconPanel.frame
+        let screen = iconPanel.screen ?? NSScreen.main!
+        let visible = screen.visibleFrame
+        let cw = Self.contentW
+        let ch = Self.contentH
+        let gap: CGFloat = 8
+
+        // 水平：以图标中心对齐，clamp 到可见区域
+        var x = iconFrame.midX - cw / 2
+        x = max(visible.minX + 8, min(x, visible.maxX - cw - 8))
+
+        // 垂直：优先向下，不够则向上
+        let y: CGFloat
+        if iconFrame.minY - ch - gap >= visible.minY {
+            y = iconFrame.minY - ch - gap
+        } else {
+            y = iconFrame.maxY + gap
         }
-        // 都不够：选剩余空间大的一边
-        return distanceToTop > distanceToBottom ? .maxY : .minY
+        return NSPoint(x: x, y: y)
+    }
+
+    // MARK: - 点击外部自动收起
+
+    private func installOutsideClickMonitor() {
+        removeOutsideClickMonitor()
+        outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            // 点击落在 App 任意一个 visible 窗口内 → 视为"内部点击"，不关闭面板。
+            // 用户点行打开 AddTodoWindow / Settings 等次级面板时，曾出现面板被瞬关，
+            // 这里加一层"任意我家窗口都不算外部"的兜底。
+            let mouseLoc = NSEvent.mouseLocation
+            let inOurWindow = NSApp.windows.contains { window in
+                window.isVisible && window.frame.contains(mouseLoc)
+            }
+            if inOurWindow { return }
+            Task { @MainActor [weak self] in self?.hideContent() }
+        }
+    }
+
+    private func removeOutsideClickMonitor() {
+        if let m = outsideClickMonitor { NSEvent.removeMonitor(m) }
+        outsideClickMonitor = nil
     }
 
     // MARK: - 坐标恢复
@@ -159,7 +228,59 @@ final class FloatingIconController: NSObject {
     }
 }
 
-// MARK: - 自定义 NSView：拖动 + 单击区分 + 绘制图标
+// MARK: - 动态像素猫图标（SwiftUI，与刘海闭合态同款睡眠动画）
+
+private struct FloatingCatView: View {
+    @State private var frameIndex = 0
+    private let timer = Timer.publish(every: 0.64, on: .main, in: .common).autoconnect()
+    private let frameNames = (5...8).map { "sleep\($0)" }
+
+    var body: some View {
+        ZStack {
+            // 白色圆角卡片 + 阴影
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.white)
+                .shadow(color: .black.opacity(0.18), radius: 6, x: 0, y: -2)
+            // 紫色细边
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color(red: 0.20, green: 0.16, blue: 0.45).opacity(0.10), lineWidth: 1)
+            // 动态像素猫
+            if let image = loadFrame(named: frameNames[frameIndex]) {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.none)
+                    .scaledToFit()
+                    .frame(width: 50, height: 42)
+            } else {
+                // 兜底：系统符号
+                Image(systemName: "cat.fill")
+                    .font(.system(size: 22, weight: .regular))
+                    .foregroundStyle(Color(red: 0.20, green: 0.16, blue: 0.45))
+            }
+        }
+        .padding(4)
+        .onReceive(timer) { _ in
+            frameIndex = (frameIndex + 1) % frameNames.count
+        }
+    }
+
+    private func loadFrame(named name: String) -> NSImage? {
+        if let url = Bundle.main.url(forResource: name, withExtension: "png", subdirectory: "SleepCat") {
+            return NSImage(contentsOf: url)
+        }
+        if let url = Bundle.main.url(forResource: name, withExtension: "png") {
+            return NSImage(contentsOf: url)
+        }
+        return nil
+    }
+}
+
+/// NSHostingView 子类：hit test 返回 nil，让鼠标事件穿透给父 NSView
+private final class PassthroughHostingView<T: View>: NSHostingView<T> {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+// MARK: - 自定义 NSView：拖动 + 单击区分，视觉由 FloatingCatView 提供
 
 final class FloatingIconNSView: NSView {
     var onClick: () -> Void = {}
@@ -173,82 +294,22 @@ final class FloatingIconNSView: NSView {
     override var isFlipped: Bool { false }
     override var acceptsFirstResponder: Bool { true }
 
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.backgroundColor = CGColor.clear
+
+        // 动态猫咪视图（穿透 hit test，鼠标事件由本 NSView 处理）
+        let hostingView = PassthroughHostingView(rootView: FloatingCatView())
+        hostingView.frame = frameRect
+        hostingView.autoresizingMask = [.width, .height]
+        addSubview(hostingView)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
     // 任何区域都接收点击
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-
-    // MARK: - 绘制
-
-    override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
-        let inset: CGFloat = 4
-        let cardRect = bounds.insetBy(dx: inset, dy: inset)
-        let radius: CGFloat = 12
-
-        // 阴影 + 白底圆角卡片
-        NSGraphicsContext.saveGraphicsState()
-        let shadow = NSShadow()
-        shadow.shadowColor = NSColor.black.withAlphaComponent(0.18)
-        shadow.shadowOffset = NSSize(width: 0, height: -2)
-        shadow.shadowBlurRadius = 6
-        shadow.set()
-
-        NSColor.white.setFill()
-        let bg = NSBezierPath(roundedRect: cardRect, xRadius: radius, yRadius: radius)
-        bg.fill()
-        NSGraphicsContext.restoreGraphicsState()
-
-        // 紫色细边
-        NSColor(red: 0.20, green: 0.16, blue: 0.45, alpha: 0.10).setStroke()
-        let border = NSBezierPath(roundedRect: cardRect, xRadius: radius, yRadius: radius)
-        border.lineWidth = 1
-        border.stroke()
-
-        let tintColor = NSColor(red: 0.20, green: 0.16, blue: 0.45, alpha: 1)
-        let drawRect = NSRect(
-            x: cardRect.midX - 12,
-            y: cardRect.midY - 11,
-            width: 24,
-            height: 22
-        )
-        drawCatIcon(in: drawRect, tint: tintColor, fallbackFontSize: 15)
-    }
-
-    private func drawCatIcon(in rect: NSRect, tint: NSColor, fallbackFontSize: CGFloat) {
-        for name in ["cat.fill", "pawprint.fill"] {
-            guard let symbol = NSImage(systemSymbolName: name, accessibilityDescription: "喵咚") else {
-                continue
-            }
-            let config = NSImage.SymbolConfiguration(pointSize: rect.height, weight: .regular)
-            let image = symbol.withSymbolConfiguration(config) ?? symbol
-            drawTintedImage(image, in: rect, tint: tint)
-            return
-        }
-
-        let text = "喵" as NSString
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: fallbackFontSize, weight: .bold),
-            .foregroundColor: tint
-        ]
-        let textSize = text.size(withAttributes: attributes)
-        text.draw(
-            at: NSPoint(x: rect.midX - textSize.width / 2, y: rect.midY - textSize.height / 2),
-            withAttributes: attributes
-        )
-    }
-
-    private func drawTintedImage(_ image: NSImage, in rect: NSRect, tint: NSColor) {
-        guard let context = NSGraphicsContext.current?.cgContext else {
-            image.draw(in: rect)
-            return
-        }
-        context.saveGState()
-        defer { context.restoreGState() }
-        image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1.0)
-        // tint：用 destinationIn 让 alpha 保留 + 颜色覆盖
-        context.setBlendMode(.sourceAtop)
-        tint.setFill()
-        rect.fill()
-    }
 
     // MARK: - 鼠标事件：拖动 vs 单击
 

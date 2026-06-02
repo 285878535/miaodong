@@ -6,6 +6,8 @@
 //
 
 import SwiftUI
+import AppKit
+import Combine
 
 struct AlertView: View {
     let title: String
@@ -58,7 +60,7 @@ struct AlertView: View {
 
             // 主体：像素猫 + 信息
             HStack(alignment: .center, spacing: 14) {
-                PixelCatWithBellView()
+                NotifyCatFrameAnimation()
                     .frame(width: 72, height: 72)
 
                 VStack(alignment: .leading, spacing: 3) {
@@ -229,29 +231,48 @@ struct AlertView: View {
     }
 }
 
-// MARK: - 像素猫占位（等设计图正式 PNG 后用 Image("pixel_cat_alert") 替换）
+// MARK: - 通知猫动画
 
-private struct PixelCatWithBellView: View {
+private struct NotifyCatFrameAnimation: View {
+    @State private var frameIndex = 0
+    private let timer = Timer.publish(every: 0.64, on: .main, in: .common).autoconnect()
+
     var body: some View {
-        ZStack {
-            Image(systemName: "cat")
-                .font(.system(size: 56, weight: .regular))
-                .foregroundStyle(AppPalette.primary)
-
-            // 腮红
-            HStack(spacing: 18) {
-                Circle().fill(Color.pink.opacity(0.45)).frame(width: 4, height: 4)
-                Circle().fill(Color.pink.opacity(0.45)).frame(width: 4, height: 4)
+        Group {
+            if let image = loadFrame(named: "notify\(frameIndex + 1)") {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.none)
+                    .scaledToFit()
             }
-            .offset(y: 2)
-
-            // 铃铛
-            Image(systemName: "bell.fill")
-                .font(.system(size: 14, weight: .bold))
-                .foregroundStyle(.orange)
-                .offset(x: 20, y: 14)
-                .rotationEffect(.degrees(20), anchor: .top)
         }
+        .onReceive(timer) { _ in
+            frameIndex = (frameIndex + 1) % 8
+        }
+    }
+
+    private func loadFrame(named name: String) -> NSImage? {
+        if let url = Bundle.main.url(forResource: name, withExtension: "png") {
+            return NSImage(contentsOf: url)
+        }
+
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Resources")
+            .appendingPathComponent("\(name).png")
+        if let image = NSImage(contentsOf: sourceURL) {
+            return image
+        }
+
+        let imageSourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("images")
+            .appendingPathComponent("output_transparent")
+            .appendingPathComponent("\(name).png")
+        return NSImage(contentsOf: imageSourceURL)
     }
 }
 

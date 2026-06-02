@@ -90,7 +90,7 @@ struct CloudLayer: View {
     }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 0.5, paused: false)) { ctx in
+        TimelineView(.animation(minimumInterval: 1.0, paused: false)) { ctx in
             GeometryReader { geo in
                 ZStack {
                     ForEach(clouds.indices, id: \.self) { i in
@@ -107,8 +107,8 @@ struct CloudLayer: View {
     }
 
     private func cloudView(_ cloud: Cloud, containerSize: CGSize, t: TimeInterval) -> some View {
-        let dx = CGFloat(sin((t + cloud.phase) * 0.18)) * cloud.drift
-        let dy = CGFloat(cos((t + cloud.phase) * 0.13)) * (cloud.drift * 0.6)
+        let dx = CGFloat(sin((t + cloud.phase) * 0.09)) * cloud.drift
+        let dy = CGFloat(cos((t + cloud.phase) * 0.065)) * (cloud.drift * 0.6)
         return Ellipse()
             .fill(cloud.color)
             .frame(width: cloud.size.width, height: cloud.size.height)
@@ -150,7 +150,7 @@ struct HeaderToBodyFade: View {
 /// 三只小 Z 缓缓向上飘 + 淡出，循环
 struct ZzzFloater: View {
     var body: some View {
-        TimelineView(.animation(minimumInterval: 0.08, paused: false)) { ctx in
+        TimelineView(.animation(minimumInterval: 0.16, paused: false)) { ctx in
             let now = ctx.date.timeIntervalSinceReferenceDate
             ZStack {
                 ForEach(0..<3) { i in
@@ -164,7 +164,7 @@ struct ZzzFloater: View {
 
     private func zz(index: Int, time: TimeInterval) -> some View {
         // 每只 Z 周期 2.4s，间隔 0.8s 错峰
-        let period: Double = 2.4
+        let period: Double = 4.8
         let offset = Double(index) * 0.8
         let t = ((time + offset).truncatingRemainder(dividingBy: period)) / period  // 0..1
         let y = -CGFloat(t) * 26                              // 向上飘 26pt
@@ -205,13 +205,13 @@ struct TwinklingStars: View {
     ]
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 0.08, paused: false)) { ctx in
+        TimelineView(.animation(minimumInterval: 0.16, paused: false)) { ctx in
             GeometryReader { geo in
                 let now = ctx.date.timeIntervalSinceReferenceDate
                 ZStack {
                     ForEach(stars.indices, id: \.self) { i in
                         let star = stars[i]
-                        let t = (now + star.phase) * star.speed
+                        let t = (now + star.phase) * star.speed * 0.5
                         // 0.35 ~ 0.95 的透明度区间，sin 呼吸
                         let twinkle = 0.65 + 0.30 * sin(t)
                         Image(systemName: "sparkle")

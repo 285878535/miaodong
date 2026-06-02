@@ -181,7 +181,7 @@ extension NlpParser {
             }
         }
         // 中文数字 + 单位
-        if let m = firstMatch(in: text, pattern: "提前\\s*([零一二两三四五六七八九十]{1,3})\\s*(分钟|小时|时|钟头|秒钟|秒|天|日)\\s*(?:提醒)?") {
+        if let m = firstMatch(in: text, pattern: "提前\\s*([零一二两三四五六七八九十百]{1,3})\\s*(分钟|小时|时|钟头|秒钟|秒|天|日)\\s*(?:提醒)?") {
             if let n = parseChineseNumber(m.captured(1, in: text)),
                let unit = unitToSeconds[m.captured(2, in: text)] {
                 text.removeSubrange(m.fullRange)
@@ -220,7 +220,7 @@ extension NlpParser {
                 return n * unit
             }
         }
-        if let m = firstMatch(in: text, pattern: "\(trigger)\\s*([零一二两三四五六七八九十]{1,3})\\s*(分钟|小时|时|钟头|秒钟|秒|天|日)\(tail)") {
+        if let m = firstMatch(in: text, pattern: "\(trigger)\\s*([零一二两三四五六七八九十百]{1,3})\\s*(分钟|小时|时|钟头|秒钟|秒|天|日)\(tail)") {
             if let n = parseChineseNumber(m.captured(1, in: text)),
                let unit = unitToSeconds[m.captured(2, in: text)] {
                 text.removeSubrange(m.fullRange)
@@ -304,21 +304,30 @@ extension NlpParser {
         }
 
         // 优先级 2：下周 X
+        // 语义：本周以周一为起点（firstWeekday=2），"下周X" = 下个周一开始的那一周的 X。
+        // 旧实现 `(weekdayNum - today + 7) % 7` 后再 +7 会多算一周，
+        // 例如周三说"下周一" → 应是 5 天后，旧代码会得到 12 天。
         if let m = firstMatch(in: text, pattern: "下周([一二三四五六日天])?") {
             let dayChar = m.captured(1, in: text).first
             text.removeSubrange(m.fullRange)
             matched.append(m.fullString)
-            if let ch = dayChar, let weekdayNum = chineseWeekdayToCalendar(ch) {
-                let today = cal.component(.weekday, from: now)
-                var daysUntil = (weekdayNum - today + 7) % 7
-                if daysUntil == 0 { daysUntil = 7 } else { daysUntil += 7 }
-                let d = cal.date(byAdding: .day, value: daysUntil, to: startOfToday)!
-                return DateAnchor(date: d, isExactTime: false)
-            }
-            let today = cal.component(.weekday, from: now)
-            let weekdayMon = 2
-            var daysUntil = (weekdayMon - today + 7) % 7
-            if daysUntil == 0 { daysUntil = 7 } else { daysUntil += 7 }
+
+            // Apple weekday: 周日=1, 周一=2, ..., 周六=7
+            // 转 ISO weekday: 周一=1, ..., 周日=7
+            let appleToday = cal.component(.weekday, from: now)
+            let isoToday = appleToday == 1 ? 7 : appleToday - 1
+            // 本周一距今的天数（≤ 0）
+            let daysToThisMonday = -(isoToday - 1)
+            // 下周一距今的天数
+            let daysToNextMonday = daysToThisMonday + 7
+
+            // 目标 weekday（ISO，缺省取下周一）
+            let isoTarget: Int = {
+                guard let ch = dayChar, let apple = chineseWeekdayToCalendar(ch) else { return 1 }
+                return apple == 1 ? 7 : apple - 1
+            }()
+
+            let daysUntil = daysToNextMonday + (isoTarget - 1)
             let d = cal.date(byAdding: .day, value: daysUntil, to: startOfToday)!
             return DateAnchor(date: d, isExactTime: false)
         }
@@ -366,9 +375,13 @@ extension NlpParser {
         if let r = text.range(of: "周末", options: .caseInsensitive) {
             text.removeSubrange(r)
             matched.append("周末")
+            // Apple weekday: 周日=1, 周六=7
+            // "周末" = 即将到来的周六；如果今天就是周六或周日则取今天
             let today = cal.component(.weekday, from: now)
-            let weekdaySat = 7
-            let daysUntil = (weekdaySat - today + 7) % 7
+            if today == 7 || today == 1 {
+                return DateAnchor(date: startOfToday, isExactTime: false)
+            }
+            let daysUntil = 7 - today          // 周一~周五到周六的天数：5,4,3,2,1
             let d = cal.date(byAdding: .day, value: daysUntil, to: startOfToday)!
             return DateAnchor(date: d, isExactTime: false)
         }
@@ -422,7 +435,7 @@ extension NlpParser {
             }
         }
 
-        if let m = firstMatch(in: text, pattern: "([零一二两三四五六七八九十]{1,3})(分钟|小时|时|钟头|秒钟|秒|天|日)\\s*后") {
+        if let m = firstMatch(in: text, pattern: "([零一二两三四五六七八九十百]{1,3})(分钟|小时|时|钟头|秒钟|秒|天|日)\\s*后") {
             if let n = parseChineseNumber(m.captured(1, in: text)),
                let mult = unitToSeconds[m.captured(2, in: text)] {
                 text.removeSubrange(m.fullRange)
@@ -497,7 +510,7 @@ extension NlpParser {
         }
 
         // 2) （时段）? N 点（半 | N 分）?
-        let periodPattern = "(凌晨|早上|上午|中午|下午|傍晚|晚上|深夜)?\\s*([零一二两三四五六七八九十]{1,3}|\\d{1,2})\\s*[点时]\\s*(半|\\d{1,2}\\s*分?)?"
+        let periodPattern = "(凌晨|早上|上午|中午|下午|傍晚|晚上|深夜)?\\s*([零一二两三四五六七八九十百]{1,3}|\\d{1,2})\\s*[点时]\\s*(半|\\d{1,2}\\s*分?)?"
         if let m = firstMatch(in: text, pattern: periodPattern) {
             let periodStr = m.captured(1, in: text)
             let hourStr = m.captured(2, in: text)
@@ -564,21 +577,35 @@ extension NlpParser {
         switch chars.count {
         case 1:
             if chars[0] == "十" { return 10 }
+            if chars[0] == "百" { return 100 }
             return single[chars[0]]
         case 2:
+            // 十X：1X
             if chars[0] == "十" {
                 guard let v = single[chars[1]] else { return nil }
                 return 10 + v
             }
+            // X十：X0
             if chars[1] == "十" {
                 guard let v = single[chars[0]] else { return nil }
                 return v * 10
             }
+            // X百：X00
+            if chars[1] == "百" {
+                guard let v = single[chars[0]] else { return nil }
+                return v * 100
+            }
             return nil
         case 3:
+            // X十Y：XY
             if chars[1] == "十", let x = single[chars[0]], let y = single[chars[2]] {
                 return x * 10 + y
             }
+            // X百：X00
+            if chars[1] == "百", let x = single[chars[0]] {
+                return x * 100
+            }
+            // 一百Y → 10Y 这种简写不支持（语义模糊）
             return nil
         default:
             return nil

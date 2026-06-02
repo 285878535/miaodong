@@ -31,3 +31,7 @@ playground.xcworkspace
 .DS_Store
 .claude/
 AGENTS.md
+*.fuse_hidden*
+# 编译中间产物
+*.o
+test_compile.o

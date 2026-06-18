@@ -11,7 +11,7 @@
 //
 
 import SwiftUI
-import SwiftData
+import CoreData
 import Combine
 import AppKit
 
@@ -23,19 +23,13 @@ struct ContentView: View {
         self.attachedToNotch = attachedToNotch
     }
 
-    @Query(
-        filter: #Predicate<Todo> { !$0.isCompleted },
-        sort: [SortDescriptor(\Todo.dueDate, order: .forward)]
-    )
-    private var todos: [Todo]
+    @FetchRequest(fetchRequest: Todo.activeFetchRequest())
+    private var todos: FetchedResults<Todo>
 
-    @Query(
-        filter: #Predicate<Todo> { $0.isCompleted },
-        sort: [SortDescriptor(\Todo.completedAt, order: .reverse)]
-    )
-    private var completedTodos: [Todo]
+    @FetchRequest(fetchRequest: Todo.completedFetchRequest())
+    private var completedTodos: FetchedResults<Todo>
 
-    @Environment(\.modelContext) private var context
+    @Environment(\.managedObjectContext) private var context
     // 监听主题色变化以触发重渲染（AppPalette.accent 是 static var，需要靠此驱动刷新）
     @AppStorage(AppSettingsKeys.accentColor) private var _accentColorId: String = ThemeColor.purple.rawValue
     // 监听猫成长事件（升级），自动弹庆祝 toast
@@ -84,10 +78,10 @@ struct ContentView: View {
             .onAppear {
                 if !expiredTodos.isEmpty { showExpired = true }
             }
-            .onChange(of: expiredTodos.isEmpty) { _, isEmpty in
+            .onChange(of: expiredTodos.isEmpty) { isEmpty in
                 if !isEmpty { showExpired = true }
             }
-            .onChange(of: growth.pendingLevelUp) { _, newLevel in
+            .onChange(of: growth.pendingLevelUp) { newLevel in
                 guard let newLevel else { return }
                 CompletionToastController.shared.show(
                     title: "🎉 升级啦！Lv \(newLevel)",
@@ -393,7 +387,7 @@ struct ContentView: View {
             onHover: { hoveredHistoryButton = $0; if $0 { recordInteraction() } },
             help: "历史任务"
         ) {
-            HistoryWindowController.shared.show(modelContainer: context.container)
+            HistoryWindowController.shared.show(context: context)
         }
     }
 
@@ -747,12 +741,17 @@ struct ContentView: View {
 
     private func openAddPanel() {
         recordInteraction()
-        AddTodoWindowController.shared.show(modelContainer: context.container)
+        AddTodoWindowController.shared.show(context: context)
     }
 
     private func openEditPanel(for todo: Todo) {
         recordInteraction()
-        AddTodoWindowController.shared.show(modelContainer: context.container, editing: todo)
+        if todo.isCompleted {
+            // 已完成任务：只读查看详情，可一键复制为新任务，但不可编辑
+            CompletedTodoWindowController.shared.show(context: context, todo: todo)
+        } else {
+            AddTodoWindowController.shared.show(context: context, editing: todo)
+        }
     }
 
     // MARK: - 行为
@@ -1012,33 +1011,29 @@ private struct SweepBorder: View {
 }
 
 #Preview {
-    do {
-        let container = try ModelContainer(
-            for: Todo.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
-        )
-        let ctx = container.mainContext
-        ctx.insert(Todo(
-            title: "开会",
-            dueDate: Date().addingTimeInterval(3600 * 2),
-            notifyOffsetSeconds: 15 * 60,
-            tags: [.social]
-        ))
-        ctx.insert(Todo(
-            title: "写周报",
-            dueDate: Date().addingTimeInterval(3600 * 7),
-            notifyOffsetSeconds: 10 * 60,
-            priority: .high,
-            tags: [.work]
-        ))
-        ctx.insert(Todo(
-            title: "健身",
-            dueDate: Date().addingTimeInterval(3600 * 10),
-            tags: [.exercise]
-        ))
-        return ContentView()
-            .modelContainer(container)
-    } catch {
-        return Text("Preview error: \(error.localizedDescription)")
-    }
+    let container = try! TodoStore.makeDefaultContainer(inMemory: true)
+    let ctx = container.viewContext
+    _ = Todo(
+        context: ctx,
+        title: "开会",
+        dueDate: Date().addingTimeInterval(3600 * 2),
+        notifyOffsetSeconds: 15 * 60,
+        tags: [.social]
+    )
+    _ = Todo(
+        context: ctx,
+        title: "写周报",
+        dueDate: Date().addingTimeInterval(3600 * 7),
+        notifyOffsetSeconds: 10 * 60,
+        priority: .high,
+        tags: [.work]
+    )
+    _ = Todo(
+        context: ctx,
+        title: "健身",
+        dueDate: Date().addingTimeInterval(3600 * 10),
+        tags: [.exercise]
+    )
+    return ContentView()
+        .environment(\.managedObjectContext, ctx)
 }

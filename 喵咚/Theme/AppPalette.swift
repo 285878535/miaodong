@@ -331,3 +331,28 @@ extension AppPalette {
         }
     }
 }
+
+// MARK: - 跟随外观色的开关样式
+//
+// macOS 的 `.switch` 样式不响应 `.tint`（开启色固定走系统强调色，常显示为蓝色），
+// 所以自绘一个开关：开启时填充用户在「外观」里选的强调色 AppPalette.accent。
+struct AccentSwitchToggleStyle: ToggleStyle {
+    var onColor: Color = AppPalette.accent
+
+    func makeBody(configuration: Configuration) -> some View {
+        let isOn = configuration.isOn
+        return RoundedRectangle(cornerRadius: 11, style: .continuous)
+            .fill(isOn ? onColor : Color(white: 0.82))
+            .frame(width: 38, height: 22)
+            .overlay(alignment: .center) {
+                Circle()
+                    .fill(Color.white)
+                    .shadow(color: .black.opacity(0.18), radius: 1, x: 0, y: 0.5)
+                    .frame(width: 18, height: 18)
+                    .offset(x: isOn ? 8 : -8)
+            }
+            .animation(.easeInOut(duration: 0.18), value: isOn)
+            .contentShape(Rectangle())
+            .onTapGesture { configuration.isOn.toggle() }
+    }
+}

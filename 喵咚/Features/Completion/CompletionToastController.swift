@@ -42,6 +42,9 @@ final class CompletionToastController {
     // MARK: - 内部
 
     private func show(style: CompletionToast.Style) {
+        // 完成庆祝时播放提示音（受设置页「播放提示音」开关 / 选项控制）
+        ReminderSound.playInAppAlert()
+
         let id = UUID()
         let panel = makePanel()
 

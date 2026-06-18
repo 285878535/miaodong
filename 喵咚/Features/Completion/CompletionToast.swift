@@ -12,6 +12,8 @@
 //
 
 import SwiftUI
+import AppKit
+import Combine
 
 struct CompletionToast: View {
     enum Style {
@@ -107,23 +109,15 @@ struct CompletionToast: View {
 // MARK: - 占位像素猫（用户提供 Image("completion_cat") 后会自动用真图）
 
 private struct CompletionCatPlaceholder: View {
-    @State private var jumping: Bool = false
+    /// 完成庆祝序列帧（彩色像素猫，与菜单栏同款 complete1-8）
+    private let frames = (1...8).map { "complete\($0)" }
+    @State private var idx = 0
+    private let timer = Timer.publish(every: 0.2, on: .main, in: .common).autoconnect()
 
     var body: some View {
         ZStack {
-            // 优先用 Asset 中的 "completion_cat"，找不到则回退到 SF Symbol
-            if NSImage(named: "completion_cat") != nil {
-                Image("completion_cat")
-                    .resizable()
-                    .interpolation(.none) // 像素风：禁用插值
-                    .scaledToFit()
-                    .offset(y: jumping ? -3 : 0)
-            } else {
-                Image(systemName: "cat.fill")
-                    .font(.system(size: 30))
-                    .foregroundStyle(AppPalette.primary.opacity(0.9))
-                    .offset(y: jumping ? -3 : 0)
-            }
+            catImage
+                .frame(width: 44, height: 38)
 
             // 星星点缀（与设计图氛围一致）
             Image(systemName: "sparkle")
@@ -139,11 +133,42 @@ private struct CompletionCatPlaceholder: View {
                 .foregroundStyle(.yellow)
                 .offset(x: 16, y: 14)
         }
-        .onAppear {
-            withAnimation(.easeInOut(duration: 0.45).repeatForever(autoreverses: true)) {
-                jumping = true
-            }
+        .onReceive(timer) { _ in
+            idx = (idx + 1) % frames.count
         }
+    }
+
+    @ViewBuilder
+    private var catImage: some View {
+        if let img = loadFrame(frames[idx]) {
+            Image(nsImage: img)
+                .resizable()
+                .interpolation(.none) // 像素风：禁用插值
+                .scaledToFit()
+        } else if NSImage(named: "completion_cat") != nil {
+            Image("completion_cat")
+                .resizable()
+                .interpolation(.none)
+                .scaledToFit()
+        } else {
+            Image(systemName: "cat.fill")
+                .font(.system(size: 30))
+                .foregroundStyle(AppPalette.primary.opacity(0.9))
+        }
+    }
+
+    private func loadFrame(_ name: String) -> NSImage? {
+        if let url = Bundle.main.url(forResource: name, withExtension: "png") {
+            return NSImage(contentsOf: url)
+        }
+        // Dev 兜底：从源码 Resources/ 读
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Resources")
+            .appendingPathComponent("\(name).png")
+        return NSImage(contentsOf: url)
     }
 }
 

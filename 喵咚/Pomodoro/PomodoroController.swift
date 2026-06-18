@@ -99,7 +99,7 @@ final class PomodoroController: NSObject, NSWindowDelegate {
             content.subtitle = session.taskLabel
         }
         content.body = "已专注 \(session.focusMinutes) 分钟，喵咚陪你的第 \(session.todayCount) 个 🍅"
-        content.sound = .default
+        content.sound = ReminderSound.notificationSound()
 
         let request = UNNotificationRequest(
             identifier: "pomodoro-finish-\(UUID().uuidString)",

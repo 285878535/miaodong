@@ -304,7 +304,7 @@ private struct PomodoroFocusCat: View {
             guard running else { return }
             frameIndex = (frameIndex + 1) % 8
         }
-        .onChange(of: running) { _, isRunning in
+        .onChange(of: running) { isRunning in
             if !isRunning { frameIndex = 0 }
         }
     }

@@ -68,6 +68,9 @@ final class AlertWindowController {
         positionPanel(panel, slot: slot)
         panel.orderFrontRegardless()
         panels[id] = panel
+
+        // 应用内提醒弹窗出现时播放提示音（受设置页开关 / 选项控制）
+        ReminderSound.playInAppAlert()
     }
 
     func dismiss(id: UUID) {

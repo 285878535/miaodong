@@ -6,7 +6,7 @@
 import SwiftUI
 
 struct TodoRowView: View {
-    @Bindable var todo: Todo
+    @ObservedObject var todo: Todo
     var onToggle: () -> Void = {}
     var onEdit: () -> Void = {}
     /// 行尾装饰小猫的心情；nil = 不显示
@@ -97,8 +97,6 @@ struct TodoRowView: View {
         Button(action: { onEdit() }) {
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 6) {
-                    Text(emojiIcon)
-                        .font(.system(size: 13.5))
                     Text(todo.title)
                         .font(.system(size: 13.5, weight: .semibold))
                         .foregroundStyle(visualCompleted ? AppPalette.secondary.opacity(0.55) : AppPalette.primary)
@@ -171,30 +169,6 @@ struct TodoRowView: View {
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
             onToggle()
-        }
-    }
-
-    // MARK: - icon
-
-    private var emojiIcon: String {
-        if let custom = todo.iconName, !custom.isEmpty { return custom }
-        guard let tag = todo.tags.first else { return "🐱" }
-        switch tag {
-        case .work:     return "📝"
-        case .study, .learning: return "📚"
-        case .exercise: return "🏃"
-        case .health:   return "💊"
-        case .hobby:    return "🎨"
-        case .social:   return "💬"
-        case .shopping: return "🛒"
-        case .cleaning: return "✨"
-        case .finance:  return "💰"
-        case .planning: return "📅"
-        case .creative: return "💡"
-        case .rest:     return "🛏️"
-        case .family:   return "🏠"
-        case .personal: return "🙂"
-        case .other:    return "🔖"
         }
     }
 

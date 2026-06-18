@@ -10,23 +10,23 @@
 
 import AppKit
 import SwiftUI
-import SwiftData
+import CoreData
 
 @MainActor
 final class QuickCaptureController: NSObject, NSWindowDelegate {
     static let shared = QuickCaptureController()
 
     private var panel: NSPanel?
-    private var modelContainer: ModelContainer?
+    private var context: NSManagedObjectContext?
     private var outsideClickMonitor: Any?
 
     private override init() {
         super.init()
     }
 
-    /// AppDelegate 启动时调一次，把 SwiftData container 攒住
-    func attach(modelContainer: ModelContainer) {
-        self.modelContainer = modelContainer
+    /// AppDelegate 启动时调一次，把 Core Data 主上下文攒住
+    func attach(context: NSManagedObjectContext) {
+        self.context = context
     }
 
     /// 显示 / 切换：已开着就关，没开就开
@@ -39,8 +39,8 @@ final class QuickCaptureController: NSObject, NSWindowDelegate {
     }
 
     func show() {
-        guard let modelContainer else {
-            NSLog("[QuickCapture] modelContainer 还没装好，忽略本次触发")
+        guard let ctx = context else {
+            NSLog("[QuickCapture] context 还没装好，忽略本次触发")
             return
         }
 
@@ -50,8 +50,6 @@ final class QuickCaptureController: NSObject, NSWindowDelegate {
             NSApp.activate(ignoringOtherApps: true)
             return
         }
-
-        let ctx = modelContainer.mainContext
 
         let panelSize = NSSize(width: 600, height: 200)  // 留点 padding 给阴影
         let p = NSPanel(
@@ -77,8 +75,8 @@ final class QuickCaptureController: NSObject, NSWindowDelegate {
         p.becomesKeyOnlyIfNeeded = false
 
         let root = QuickCaptureView(
-            onSubmit: { [weak self] todo in
-                ctx.insert(todo)
+            onSubmit: { [weak self] draft in
+                let todo = Todo(context: ctx, draft: draft)
                 try? ctx.save()
                 NotificationManager.shared.schedule(for: todo)
                 ReminderScheduler.shared.reload()
@@ -88,7 +86,7 @@ final class QuickCaptureController: NSObject, NSWindowDelegate {
                 self?.close()
             }
         )
-        .modelContainer(modelContainer)
+        .environment(\.managedObjectContext, ctx)
 
         let hc = NSHostingController(rootView: root)
         hc.view.wantsLayer = true

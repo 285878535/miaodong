@@ -18,13 +18,14 @@ enum AppSettingsKeys {
     static let soundEnabled = "soundEnabled"
     static let pixelAlertEnabled = "pixelAlertEnabled"
     static let alertSound = "alertSound"
-    static let themeMode = "themeMode"
     /// 图标显示模式（菜单栏 / 灵动岛 / 悬浮窗）
     static let iconDisplayMode = "iconDisplayMode"
     static let accentColor = "accentColor"
     /// 悬浮图标坐标
     static let floatingIconX = "floatingIconX"
     static let floatingIconY = "floatingIconY"
+    /// 悬浮图标尺寸（边长 pt）
+    static let floatingIconSize = "floatingIconSize"
     /// ⌥Space 全局快速捕获开关
     static let quickCaptureEnabled = "quickCaptureEnabled"
     /// 全局快速捕获快捷键 keyCode（kVK_*）
@@ -44,13 +45,14 @@ enum AppSettingsKeys {
 }
 
 enum SettingsTab: String, CaseIterable {
-    case general, reminder, appearance, about
+    case general, reminder, appearance, help, about
 
     var label: String {
         switch self {
         case .general:    return "通用"
         case .reminder:   return "提醒"
         case .appearance: return "外观"
+        case .help:       return "帮助"
         case .about:      return "关于"
         }
     }
@@ -59,6 +61,7 @@ enum SettingsTab: String, CaseIterable {
         case .general:    return "gearshape.fill"
         case .reminder:   return "bell.fill"
         case .appearance: return "paintbrush.fill"
+        case .help:       return "questionmark.circle.fill"
         case .about:      return "info.circle.fill"
         }
     }
@@ -172,6 +175,7 @@ struct SettingsView: View {
                     case .general:    GeneralSettingsTab()
                     case .reminder:   ReminderSettingsTab()
                     case .appearance: AppearanceSettingsTab()
+                    case .help:       HelpSettingsTab()
                     case .about:      AboutSettingsTab()
                     }
                 }
@@ -190,10 +194,10 @@ private struct GeneralSettingsTab: View {
     @AppStorage(AppSettingsKeys.showInMenuBar) private var showInMenuBar: Bool = true
     @AppStorage(AppSettingsKeys.soundEnabled) private var soundEnabled: Bool = true
     @AppStorage(AppSettingsKeys.alertSound) private var alertSound: String = "default"
-    @AppStorage(AppSettingsKeys.themeMode) private var themeMode: String = "system"
     @AppStorage(AppSettingsKeys.iconDisplayMode) private var iconDisplayMode: String = IconDisplayMode.notch.rawValue
     @AppStorage(AppSettingsKeys.quickCaptureEnabled) private var quickCaptureEnabled: Bool = true
     @AppStorage(AppSettingsKeys.iCloudSyncEnabled) private var iCloudSyncEnabled: Bool = false
+    @AppStorage(AppSettingsKeys.floatingIconSize) private var floatingIconSize: Double = 88
 
     var body: some View {
         VStack(spacing: 0) {
@@ -215,11 +219,15 @@ private struct GeneralSettingsTab: View {
                     (IconDisplayMode.notch.label,    IconDisplayMode.notch.rawValue),
                     (IconDisplayMode.floating.label, IconDisplayMode.floating.rawValue)
                 ])
-                PickerRow(title: "提示音", value: $alertSound, options: [
+                // 仅悬浮模式下可调大小
+                if iconDisplayMode == IconDisplayMode.floating.rawValue {
+                    SliderRow(title: "悬浮图标大小",
+                              value: floatingSizeBinding,
+                              range: 60...180,
+                              step: 1)
+                }
+                PickerRow(title: "提示音", value: alertSoundBinding, options: [
                     ("可爱铃声", "default"), ("叮咚", "ding"), ("猫叫", "meow")
-                ])
-                PickerRow(title: "主题模式", value: $themeMode, options: [
-                    ("跟随系统", "system"), ("浅色", "light"), ("深色", "dark")
                 ])
             }
             .padding(.top, 24)
@@ -264,6 +272,28 @@ private struct GeneralSettingsTab: View {
         )
     }
 
+    /// 切换提示音时即时试听选中的声音
+    private var alertSoundBinding: Binding<String> {
+        Binding(
+            get: { alertSound },
+            set: { newValue in
+                alertSound = newValue
+                ReminderSound.playPreview(for: newValue)
+            }
+        )
+    }
+
+    /// 拖动滑块即时改变悬浮图标大小
+    private var floatingSizeBinding: Binding<Double> {
+        Binding(
+            get: { floatingIconSize },
+            set: { newValue in
+                floatingIconSize = newValue
+                NotificationCenter.default.post(name: .floatingIconSizeDidChange, object: nil)
+            }
+        )
+    }
+
     /// 即时启停全局快捷键
     private var quickCaptureBinding: Binding<Bool> {
         Binding(
@@ -293,10 +323,8 @@ private struct GeneralSettingsTab: View {
                 ShortcutRecorderView()
             }
             Toggle("", isOn: quickCaptureBinding)
-                .toggleStyle(.switch)
                 .labelsHidden()
-                .controlSize(.small)
-                .tint(AppPalette.accent)
+                .toggleStyle(AccentSwitchToggleStyle())
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 10)
@@ -404,6 +432,159 @@ private struct AppearanceSettingsTab: View {
     }
 }
 
+// MARK: - 帮助 / 教程
+
+private struct HelpSettingsTab: View {
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                Text("小猫会陪着你，并根据待办状态变换形象 🐾")
+                    .font(.system(size: 13))
+                    .foregroundStyle(AppPalette.secondary)
+                    .padding(.top, 4)
+
+                // 小猫形象
+                helpSection("小猫的形象") {
+                    HelpCatRow(
+                        frame: "wave3", fallbackEmoji: "🐾",
+                        title: "有待办时 · 挥手",
+                        desc: "还有未完成的待办，小猫会精神地挥手，提醒你别忘了。"
+                    )
+                    HelpCatRow(
+                        frame: "sleep6", fallbackEmoji: "😴",
+                        title: "没有待办时 · 睡觉",
+                        desc: "待办全部完成、或暂时没有待办，小猫就安心打盹。"
+                    )
+                    HelpHint(text: "状态栏、灵动岛、悬浮窗三处的小猫，形象始终一致。")
+                }
+
+                // 在哪里看到它
+                helpSection("在哪里显示") {
+                    HelpTextRow(icon: "menubar.rectangle", title: "状态栏",
+                                desc: "系统菜单栏里的小图标。")
+                    HelpTextRow(icon: "rectangle.topthird.inset.filled", title: "灵动岛位置",
+                                desc: "贴在屏幕顶部刘海下方，点开展开主面板。")
+                    HelpTextRow(icon: "macwindow.on.rectangle", title: "悬浮窗",
+                                desc: "可自由拖动的悬浮小猫，大小可在“通用”里调整。")
+                    HelpHint(text: "在“通用 → 图标显示”里切换这三种显示方式。")
+                }
+
+                // 常用操作
+                helpSection("常用操作") {
+                    HelpTextRow(icon: "command", title: "⌘N 添加待办",
+                                desc: "主面板里按 ⌘N，用自然语言快速新建。")
+                    HelpTextRow(icon: "bolt.fill", title: "⌥Space 全局快速添加",
+                                desc: "任意 App 里按下，立刻记一条待办（可在“通用”里开关）。")
+                    HelpTextRow(icon: "checkmark.circle.fill", title: "完成任务",
+                                desc: "勾选完成会有小庆祝，攒经验让小猫升级成长。")
+                }
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 22)
+        }
+    }
+
+    @ViewBuilder
+    private func helpSection<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(AppPalette.primary)
+            content()
+        }
+    }
+}
+
+/// 帮助页：带小猫缩略图的一行
+private struct HelpCatRow: View {
+    let frame: String
+    let fallbackEmoji: String
+    let title: String
+    let desc: String
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Group {
+                if let img = HelpCatRow.loadFrame(frame) {
+                    Image(nsImage: img)
+                        .resizable()
+                        .interpolation(.none)
+                        .scaledToFit()
+                } else {
+                    Text(fallbackEmoji).font(.system(size: 28))
+                }
+            }
+            .frame(width: 52, height: 44)
+            .background(AppPalette.mainBg)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(AppPalette.primary)
+                Text(desc)
+                    .font(.system(size: 12))
+                    .foregroundStyle(AppPalette.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    static func loadFrame(_ name: String) -> NSImage? {
+        if let u = Bundle.main.url(forResource: name, withExtension: "png", subdirectory: "SleepCat") {
+            return NSImage(contentsOf: u)
+        }
+        if let u = Bundle.main.url(forResource: name, withExtension: "png") {
+            return NSImage(contentsOf: u)
+        }
+        return nil
+    }
+}
+
+/// 帮助页：图标 + 标题 + 说明的一行
+private struct HelpTextRow: View {
+    let icon: String
+    let title: String
+    let desc: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(AppPalette.accent)
+                .frame(width: 22, height: 22)
+                .background(AppPalette.accentSoft)
+                .clipShape(RoundedRectangle(cornerRadius: 7))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(AppPalette.primary)
+                Text(desc)
+                    .font(.system(size: 12))
+                    .foregroundStyle(AppPalette.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+/// 帮助页：浅色提示条
+private struct HelpHint: View {
+    let text: String
+    var body: some View {
+        Text(text)
+            .font(.system(size: 11.5))
+            .foregroundStyle(AppPalette.secondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(AppPalette.accentSoft.opacity(0.5))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
 private struct AboutSettingsTab: View {
     @State private var checkState: CheckState = .idle
 
@@ -492,7 +673,7 @@ private struct AboutSettingsTab: View {
 
             Spacer()
 
-            Text("© 2025 Justin Xing. All rights reserved.")
+            Text("© 2026 Justin Xing. All rights reserved.")
                 .font(.system(size: 11))
                 .foregroundStyle(AppPalette.secondary.opacity(0.7))
                 .padding(.bottom, 20)
@@ -528,12 +709,36 @@ private struct ToggleRow: View {
             Spacer()
             Toggle("", isOn: $on)
                 .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.small)
-                .tint(AppPalette.accent)
+                .toggleStyle(AccentSwitchToggleStyle())
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
+    }
+}
+
+private struct SliderRow: View {
+    let title: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let step: Double
+
+    var body: some View {
+        HStack {
+            Text(title)
+                .font(.system(size: 13))
+                .foregroundStyle(AppPalette.primary)
+            Spacer()
+            Slider(value: $value, in: range, step: step)
+                .frame(width: 130)
+                .tint(AppPalette.accent)
+            Text("\(Int(value))")
+                .font(.system(size: 12, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(AppPalette.secondary)
+                .frame(width: 30, alignment: .trailing)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 10)
     }
 }
 
@@ -572,6 +777,7 @@ private struct PickerRow: View {
                 )
             }
             .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)   // 隐藏系统自带箭头，避免与自定义 chevron.down 重复
         }
     }
 }
@@ -611,6 +817,7 @@ private struct IntPickerRow: View {
                 )
             }
             .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)   // 隐藏系统自带箭头，避免与自定义 chevron.down 重复
         }
     }
 }

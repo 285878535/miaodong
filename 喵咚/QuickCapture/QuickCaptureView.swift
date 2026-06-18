@@ -13,7 +13,7 @@ struct QuickCaptureView: View {
     @State private var parseResult: TodoParseResult?
     @FocusState private var focused: Bool
 
-    let onSubmit: (Todo) -> Void
+    let onSubmit: (TodoDraft) -> Void
     let onCancel: () -> Void
 
     var body: some View {
@@ -28,7 +28,7 @@ struct QuickCaptureView: View {
                     .font(.system(size: 16))
                     .focused($focused)
                     .onSubmit { submit() }
-                    .onChange(of: text) { _, _ in updateParse() }
+                    .onChange(of: text) { _ in updateParse() }
 
                 if !text.isEmpty {
                     Button {
@@ -176,7 +176,7 @@ struct QuickCaptureView: View {
             return
         }
         let r = NlpParser.parse(trimmed)
-        let todo = Todo(
+        let draft = TodoDraft(
             title: r.title.isEmpty ? trimmed : r.title,
             dueDate: r.dueDate,
             notifyOffsetSeconds: r.notifyOffsetSeconds,
@@ -186,6 +186,6 @@ struct QuickCaptureView: View {
             priority: r.priority,
             tags: r.tags
         )
-        onSubmit(todo)
+        onSubmit(draft)
     }
 }

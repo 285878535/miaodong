@@ -59,6 +59,8 @@ enum IconDisplayMode: String, CaseIterable, Sendable {
 extension Notification.Name {
     static let iconDisplayModeDidChange = Notification.Name("iconDisplayModeDidChange")
     static let accentColorDidChange     = Notification.Name("accentColorDidChange")
+    /// 悬浮图标大小变更（SettingsView 拖动滑块时发出，FloatingIconController 监听并按新尺寸重建）
+    static let floatingIconSizeDidChange = Notification.Name("floatingIconSizeDidChange")
 }
 
 enum Tag: String, Codable, CaseIterable, Sendable {

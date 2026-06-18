@@ -729,17 +729,14 @@ extension NlpParser {
             }
         }
 
-        cleaned = cleaned.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
-        cleaned = cleaned.replacingOccurrences(of: #"[,，。.、;；:：]+"#, with: "", options: .regularExpression)
-        cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+        // 只合并「行内」连续空格/制表符，保留用户输入的换行（待办可作多行笔记用）
+        cleaned = cleaned.replacingOccurrences(of: #"[^\S\n]+"#, with: " ", options: .regularExpression)
+        // 收敛 3 行以上的连续空行为最多一个空行，避免大段空白
+        cleaned = cleaned.replacingOccurrences(of: #"\n{3,}"#, with: "\n\n", options: .regularExpression)
+        // 只清理「首尾」残留的标点/空白（解析剔除子句后可能留下），保留正文内部标点
+        cleaned = cleaned.trimmingCharacters(in: CharacterSet(charactersIn: " \t\n,，。.、;；:："))
 
-        // 3) 如果残余仍以逗号分隔多段（标点已清除但可能仍很长），取前 12 字以内的核心动词短语
-        //   注意：上面 #"[,，。.、;；:：]+"# 替换为空字符串，所以这里其实没有标点了。
-        //   仅当长度过长（>20 字）时，截断到第一个常见动词附近的合理位置作 fallback。
-        if cleaned.count > 20 {
-            // 取前 12 字（中文）作为最终展示标题；信息字段已经由其它提取器消费
-            cleaned = String(cleaned.prefix(12))
-        }
+        // 不再对标题做长度截断 —— 完整保留用户输入（超长/多行都原样保存）。
 
         return cleaned.isEmpty ? "新提醒" : cleaned
     }

@@ -11,17 +11,24 @@ struct AddTodoView: View {
     @State private var text: String = ""
     @State private var parseResult: TodoParseResult?
     @FocusState private var textFocused: Bool
+
+    // 可手动调整的时间（初始来自自然语言解析，用户可用时间选择器覆盖）
+    @State private var dueDate: Date?
+    @State private var notifyDate: Date?
+    /// 上一次「文本解析」得到的截止时间——只有当文本里的时间变化时才重新覆盖手动选择，
+    /// 这样用户改标题文字不会冲掉已经手选的时间。
+    @State private var lastParsedDue: Date?
     /// 用户在面板里临时关闭"间隔提醒"开关 —— 关掉后提交不写入 repeatIntervalSeconds。
     /// 文本里再次出现间隔关键词 / 用户改文本时会被重新置 true。
     @State private var intervalEnabledOverride: Bool = true
 
     let isEditing: Bool
-    let onSubmit: (Todo) -> Void
+    let onSubmit: (TodoDraft) -> Void
     let onCancel: () -> Void
 
     init(initialText: String = "",
          isEditing: Bool = false,
-         onSubmit: @escaping (Todo) -> Void,
+         onSubmit: @escaping (TodoDraft) -> Void,
          onCancel: @escaping () -> Void) {
         self._text = State(initialValue: initialText)
         self.isEditing = isEditing
@@ -35,9 +42,7 @@ struct AddTodoView: View {
 
             VStack(spacing: 14) {
                 inputArea
-                if let r = parseResult, hasMeaningfulFields(r) {
-                    fieldsArea(r)
-                }
+                detailsArea
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 16)
@@ -120,7 +125,7 @@ struct AddTodoView: View {
                 .stroke(AppPalette.accent, lineWidth: 1.5)
         )
         .clipShape(RoundedRectangle(cornerRadius: 14))
-        .onChange(of: text) { _, _ in
+        .onChange(of: text) { _ in
             updateParseResult()
         }
     }
@@ -128,29 +133,18 @@ struct AddTodoView: View {
     // MARK: - 字段化回显
 
     @ViewBuilder
-    private func fieldsArea(_ r: TodoParseResult) -> some View {
+    private var detailsArea: some View {
         VStack(spacing: 0) {
-            if let due = r.dueDate {
-                fieldRow(label: "时间",
-                         value: formatDate(due),
-                         trailingIcon: "calendar")
-            }
-            if r.notifyOffsetSeconds > 0 {
+            if dueDate != nil {
+                timeRow
                 fieldDivider()
-                fieldRow(label: "提前提醒",
-                         value: humanDuration(r.notifyOffsetSeconds) + "前",
-                         trailingIcon: "chevron.down")
+                notifyRow
+            } else {
+                addTimeRow
             }
-            if r.repeatIntervalSeconds != nil {
+            if let r = parseResult, r.repeatIntervalSeconds != nil {
                 fieldDivider()
                 intervalSection(r)
-            }
-            if let due = r.dueDate {
-                let fireDate = due.addingTimeInterval(-Double(r.notifyOffsetSeconds))
-                if fireDate > Date() {
-                    fieldDivider()
-                    nextReminderRow(fireDate)
-                }
             }
         }
         .background(AppPalette.white)
@@ -158,21 +152,133 @@ struct AddTodoView: View {
         .shadow(color: AppPalette.primary.opacity(0.04), radius: 6, x: 0, y: 2)
     }
 
-    private func nextReminderRow(_ fireDate: Date) -> some View {
+    /// 时间（截止时间）—— 可用时间选择器手动调整
+    private var timeRow: some View {
         HStack(spacing: 8) {
-            Image(systemName: "bell.fill")
-                .font(.system(size: 11))
-                .foregroundStyle(AppPalette.accent.opacity(0.8))
-            Text("下次提醒")
+            Image(systemName: "calendar")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(AppPalette.primary.opacity(0.7))
+            Text("时间")
                 .font(.system(size: 13))
                 .foregroundStyle(AppPalette.primary)
             Spacer()
-            Text(formatDate(fireDate))
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(AppPalette.accent)
+            DatePicker("", selection: dueBinding, displayedComponents: [.date, .hourAndMinute])
+                .labelsHidden()
+                .datePickerStyle(.compact)
+                .tint(AppPalette.accent)
+            Button { clearTime() } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 13))
+                    .foregroundStyle(AppPalette.secondary.opacity(0.45))
+            }
+            .buttonStyle(.plain)
+            .help("清除时间")
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        .padding(.vertical, 10)
+    }
+
+    /// 下次提醒 —— 可手动选具体提醒时间；其与截止时间之差即“提前量”
+    private var notifyRow: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 8) {
+                Image(systemName: "bell.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(AppPalette.accent.opacity(0.8))
+                Text("下次提醒")
+                    .font(.system(size: 13))
+                    .foregroundStyle(AppPalette.primary)
+                Spacer()
+                DatePicker("", selection: notifyBinding, displayedComponents: [.date, .hourAndMinute])
+                    .labelsHidden()
+                    .datePickerStyle(.compact)
+                    .tint(AppPalette.accent)
+            }
+            if let hint = offsetHint {
+                Text(hint)
+                    .font(.system(size: 11))
+                    .foregroundStyle(AppPalette.secondary)
+                    .padding(.leading, 19)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    /// 未设置时间时：一键添加一个默认时间，随后即可用选择器调整
+    private var addTimeRow: some View {
+        Button { addDefaultTime() } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "calendar.badge.plus")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(AppPalette.accent)
+                Text("添加时间")
+                    .font(.system(size: 13))
+                    .foregroundStyle(AppPalette.accent)
+                Spacer()
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: - 时间绑定 / 辅助
+
+    private var dueBinding: Binding<Date> {
+        Binding(
+            get: { dueDate ?? Date() },
+            set: { newDue in
+                // 调整截止时间时，保持原有提前量（下次提醒随之平移）
+                let old = dueDate ?? newDue
+                let delta = newDue.timeIntervalSince(old)
+                dueDate = newDue
+                if let n = notifyDate { notifyDate = n.addingTimeInterval(delta) }
+            }
+        )
+    }
+
+    private var notifyBinding: Binding<Date> {
+        Binding(
+            get: { notifyDate ?? dueDate ?? Date() },
+            set: { notifyDate = $0 }
+        )
+    }
+
+    /// “提前 X 提醒 / 准时提醒”的副标题
+    private var offsetHint: String? {
+        guard let due = dueDate, let n = notifyDate else { return nil }
+        let off = Int(due.timeIntervalSince(n).rounded())
+        if off <= 0 { return "准时提醒" }
+        return "提前 \(humanDuration(off)) 提醒"
+    }
+
+    private func clearTime() {
+        dueDate = nil
+        notifyDate = nil
+        // 钉住当前解析结果，避免随后的文本解析又把时间塞回来
+        lastParsedDue = parseResult?.dueDate
+    }
+
+    private func addDefaultTime() {
+        let cal = Calendar.current
+        let now = Date()
+        // 默认「下一个整点」：显式用当前年/月/日/时构造，绝不跨年。
+        // （不用 Calendar.date(bySetting:)，它行为不可靠，曾导致默认跳到下一年。）
+        var comps = cal.dateComponents([.year, .month, .day, .hour], from: now)
+        comps.minute = 0
+        comps.second = 0
+        let topOfHour = cal.date(from: comps) ?? now
+        let base = cal.date(byAdding: .hour, value: 1, to: topOfHour) ?? now.addingTimeInterval(3600)
+        dueDate = base
+        let off = defaultNotifyOffsetSeconds()
+        notifyDate = base.addingTimeInterval(-Double(off))
+        lastParsedDue = parseResult?.dueDate
+    }
+
+    private func defaultNotifyOffsetSeconds() -> Int {
+        UserDefaults.standard.integer(forKey: AppSettingsKeys.defaultNotifyOffsetMinutes) * 60
     }
 
     private func fieldDivider() -> some View {
@@ -180,23 +286,6 @@ struct AddTodoView: View {
             .fill(AppPalette.separator.opacity(0.5))
             .frame(height: 0.5)
             .padding(.horizontal, 14)
-    }
-
-    private func fieldRow(label: String, value: String, trailingIcon: String) -> some View {
-        HStack(spacing: 8) {
-            Text(label)
-                .font(.system(size: 13))
-                .foregroundStyle(AppPalette.primary)
-            Spacer()
-            Text(value)
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(AppPalette.primary)
-            Image(systemName: trailingIcon)
-                .foregroundStyle(AppPalette.secondary.opacity(0.75))
-                .font(.system(size: 11, weight: .semibold))
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
     }
 
     private func intervalSection(_ r: TodoParseResult) -> some View {
@@ -208,9 +297,7 @@ struct AddTodoView: View {
                 Spacer()
                 Toggle("", isOn: $intervalEnabledOverride)
                     .labelsHidden()
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    .tint(AppPalette.accent)
+                    .toggleStyle(AccentSwitchToggleStyle())
             }
             .padding(.horizontal, 14)
             .padding(.top, 10)
@@ -298,10 +385,21 @@ struct AddTodoView: View {
             intervalEnabledOverride = true
         }
         parseResult = new
-    }
 
-    private func hasMeaningfulFields(_ r: TodoParseResult) -> Bool {
-        r.dueDate != nil || r.notifyOffsetSeconds > 0 || r.repeatIntervalSeconds != nil
+        // 仅当「文本里的时间」发生变化时，才用解析结果覆盖手动选择的时间，
+        // 这样用户单纯改标题文字不会冲掉已手选的时间。
+        let parsedDue = new?.dueDate
+        if parsedDue != lastParsedDue {
+            lastParsedDue = parsedDue
+            if let due = parsedDue, let r = new {
+                dueDate = due
+                let off = r.notifyOffsetSeconds > 0 ? r.notifyOffsetSeconds : defaultNotifyOffsetSeconds()
+                notifyDate = due.addingTimeInterval(-Double(off))
+            } else {
+                dueDate = nil
+                notifyDate = nil
+            }
+        }
     }
 
     private func submit() {
@@ -312,22 +410,31 @@ struct AddTodoView: View {
         let defaults = UserDefaults.standard
         let defaultNotifyMin = defaults.integer(forKey: AppSettingsKeys.defaultNotifyOffsetMinutes)
         let defaultIntervalMin = defaults.integer(forKey: AppSettingsKeys.defaultRepeatIntervalMinutes)
-        let notifyOffsetSeconds = r.notifyOffsetSeconds > 0 ? r.notifyOffsetSeconds : defaultNotifyMin * 60
+
+        // 以用户在面板里（可能手选过）的时间为准；提前量 = 截止时间 − 下次提醒时间
+        let finalDue = dueDate
+        let finalNotifyOffset: Int
+        if let due = finalDue, let n = notifyDate {
+            finalNotifyOffset = max(0, Int(due.timeIntervalSince(n).rounded()))
+        } else {
+            finalNotifyOffset = r.notifyOffsetSeconds > 0 ? r.notifyOffsetSeconds : defaultNotifyMin * 60
+        }
+
         // 用户在面板里关掉间隔开关时强制丢弃间隔信息（包含解析结果和设置项默认值）
         let parsedInterval: Int? = r.repeatIntervalSeconds ?? (defaultIntervalMin > 0 ? defaultIntervalMin * 60 : nil)
         let repeatIntervalSeconds: Int? = intervalEnabledOverride ? parsedInterval : nil
 
-        let todo = Todo(
+        let draft = TodoDraft(
             title: r.title,
-            dueDate: r.dueDate,
-            notifyOffsetSeconds: notifyOffsetSeconds,
+            dueDate: finalDue,
+            notifyOffsetSeconds: finalNotifyOffset,
             repeatIntervalSeconds: repeatIntervalSeconds,
             isRecurring: r.isRecurring,
             recurringPattern: r.recurringPattern,
             priority: r.priority,
             tags: r.tags
         )
-        onSubmit(todo)
+        onSubmit(draft)
     }
 
     // MARK: - 格式化

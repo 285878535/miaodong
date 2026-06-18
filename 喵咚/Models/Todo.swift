@@ -4,37 +4,75 @@
 //
 
 import Foundation
-import SwiftData
+import CoreData
 
-@Model
-final class Todo {
-    // 注意：不能用 @Attribute(.unique) —— CloudKit 同步不支持 unique 约束。
-    // 业务侧靠 UUID 自身的随机性保证唯一即可。
-    var id: UUID
+/// 新建/编辑待办时在视图与控制器之间传递的纯值类型。
+///
+/// Core Data 的 NSManagedObject 无法脱离 context 创建（SwiftData 的 @Model 可以先建后插），
+/// 因此输入视图不再直接构造 Todo，而是产出 TodoDraft，由控制器在自己的 context 里落库 /
+/// 或写回到正在编辑的对象。这样既避开了"在视图 context 里建了又不保存导致残留"的坑，
+/// 也让视图保持与持久化无关。
+struct TodoDraft {
     var title: String
-    var notes: String?
+    var notes: String? = nil
+    var dueDate: Date? = nil
+    var notifyOffsetSeconds: Int = 0
+    var repeatIntervalSeconds: Int? = nil
+    var isRecurring: Bool = false
+    var recurringPattern: String? = nil
+    var priority: Priority = .medium
+    var tags: [Tag] = []
+    var iconName: String? = nil
+}
 
-    var dueDate: Date?
-    var notifyOffsetSeconds: Int
-    var repeatIntervalSeconds: Int?
+@objc(Todo)
+final class Todo: NSManagedObject, Identifiable {
+    // 注意：不能用唯一约束 —— CloudKit 同步不支持 unique constraint。
+    // 业务侧靠 UUID 自身的随机性保证唯一即可。
+    @NSManaged var id: UUID
+    @NSManaged var title: String
+    @NSManaged var notes: String?
 
-    var isRecurring: Bool
-    var recurringPattern: String?
+    @NSManaged var dueDate: Date?
+    @NSManaged var notifyOffsetSeconds: Int
+    /// Core Data 标量不能表达 optional，用 NSNumber? 作后备，对外仍暴露 Int?
+    @NSManaged private var repeatIntervalRaw: NSNumber?
 
-    var isCompleted: Bool
-    var completedAt: Date?
+    @NSManaged var isRecurring: Bool
+    @NSManaged var recurringPattern: String?
+
+    @NSManaged var isCompleted: Bool
+    @NSManaged var completedAt: Date?
 
     /// 稍后提醒生效时刻：若 > now 则覆盖 notifyDate，触发后自动清空
-    var snoozeUntil: Date?
+    @NSManaged var snoozeUntil: Date?
 
-    var priorityRaw: String
-    var tagsRaw: [String]
-    var iconName: String?
+    @NSManaged var priorityRaw: String
+    /// Core Data + CloudKit 不直接支持 [String]，用逗号分隔的字符串存储，对外暴露 [String]。
+    /// Tag 的 rawValue 都是无逗号的小写词，拼接安全。
+    @NSManaged private var tagsStorage: String?
+    @NSManaged var iconName: String?
 
-    var createdAt: Date
-    var updatedAt: Date
+    @NSManaged var createdAt: Date
+    @NSManaged var updatedAt: Date
 
-    init(
+    /// 间隔重复秒数（nil = 不重复）
+    var repeatIntervalSeconds: Int? {
+        get { repeatIntervalRaw?.intValue }
+        set { repeatIntervalRaw = newValue.map(NSNumber.init(value:)) }
+    }
+
+    /// 标签 rawValue 数组（底层以逗号分隔的字符串存储）
+    var tagsRaw: [String] {
+        get {
+            guard let s = tagsStorage, !s.isEmpty else { return [] }
+            return s.split(separator: ",").map(String.init)
+        }
+        set { tagsStorage = newValue.joined(separator: ",") }
+    }
+
+    convenience init(
+        context: NSManagedObjectContext,
         id: UUID = UUID(),
         title: String,
         notes: String? = nil,
@@ -52,6 +90,7 @@ final class Todo {
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
+        self.init(context: context)
         self.id = id
         self.title = title
         self.notes = notes
@@ -69,7 +108,67 @@ final class Todo {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
+
+    /// `id` 是唯一没有模型层默认值的非可选属性（UUID 无法在程序化模型里设默认值）。
+    /// 这里在对象插入时兜底赋值，防止 CloudKit 同步来一条缺 `id` 字段的记录时，
+    /// 后续读取 `todo.id` 触发非可选解包崩溃。本地新建会被 convenience init 的真实值覆盖。
+    override func awakeFromInsert() {
+        super.awakeFromInsert()
+        if value(forKey: "id") == nil {
+            id = UUID()
+        }
+    }
+
+    /// 从草稿在指定 context 里创建
+    convenience init(context: NSManagedObjectContext, draft: TodoDraft) {
+        self.init(
+            context: context,
+            title: draft.title,
+            notes: draft.notes,
+            dueDate: draft.dueDate,
+            notifyOffsetSeconds: draft.notifyOffsetSeconds,
+            repeatIntervalSeconds: draft.repeatIntervalSeconds,
+            isRecurring: draft.isRecurring,
+            recurringPattern: draft.recurringPattern,
+            priority: draft.priority,
+            tags: draft.tags,
+            iconName: draft.iconName
+        )
+    }
 }
+
+// MARK: - 取数请求（显式 entityName，避开程序化模型下 .entity() 的歧义）
+
+extension Todo {
+    static func makeFetchRequest() -> NSFetchRequest<Todo> {
+        NSFetchRequest<Todo>(entityName: "Todo")
+    }
+
+    /// 未完成，按截止时间升序
+    static func activeFetchRequest() -> NSFetchRequest<Todo> {
+        let r = makeFetchRequest()
+        r.predicate = NSPredicate(format: "isCompleted == NO")
+        r.sortDescriptors = [NSSortDescriptor(keyPath: \Todo.dueDate, ascending: true)]
+        return r
+    }
+
+    /// 已完成，按完成时间倒序
+    static func completedFetchRequest() -> NSFetchRequest<Todo> {
+        let r = makeFetchRequest()
+        r.predicate = NSPredicate(format: "isCompleted == YES")
+        r.sortDescriptors = [NSSortDescriptor(keyPath: \Todo.completedAt, ascending: false)]
+        return r
+    }
+
+    /// 全部，按创建时间倒序
+    static func allByCreatedDescRequest() -> NSFetchRequest<Todo> {
+        let r = makeFetchRequest()
+        r.sortDescriptors = [NSSortDescriptor(keyPath: \Todo.createdAt, ascending: false)]
+        return r
+    }
+}
+
+// MARK: - 业务派生属性 / 行为
 
 extension Todo {
     var priority: Priority {

@@ -8,13 +8,13 @@
 //
 
 import Foundation
-import SwiftData
+import CoreData
 
 @MainActor
 final class ReminderScheduler {
     static let shared = ReminderScheduler()
 
-    private var container: ModelContainer?
+    private var container: NSPersistentContainer?
     private var initialTimers: [UUID: Timer] = [:]
     private var repeatTimers: [UUID: Timer] = [:]
 
@@ -22,7 +22,7 @@ final class ReminderScheduler {
 
     private init() {}
 
-    func attach(container: ModelContainer) {
+    func attach(container: NSPersistentContainer) {
         self.container = container
     }
 
@@ -31,11 +31,10 @@ final class ReminderScheduler {
     func reload() {
         cancelAll()
         guard let container else { return }
-        let ctx = container.mainContext
-        let descriptor = FetchDescriptor<Todo>(
-            predicate: #Predicate<Todo> { !$0.isCompleted }
-        )
-        let todos = (try? ctx.fetch(descriptor)) ?? []
+        let ctx = container.viewContext
+        let request = Todo.makeFetchRequest()
+        request.predicate = NSPredicate(format: "isCompleted == NO")
+        let todos = (try? ctx.fetch(request)) ?? []
 
         let now = Date()
         for todo in todos {
@@ -77,11 +76,11 @@ final class ReminderScheduler {
     /// 不重置定时器（横幅本身已经把首次提醒消耗掉了，间隔重复继续由 Timer 驱动）。
     func triggerAlert(for todoId: UUID) {
         guard let container else { return }
-        let ctx = container.mainContext
-        let descriptor = FetchDescriptor<Todo>(
-            predicate: #Predicate<Todo> { $0.id == todoId }
-        )
-        guard let todo = (try? ctx.fetch(descriptor))?.first, !todo.isCompleted else { return }
+        let ctx = container.viewContext
+        let request = Todo.makeFetchRequest()
+        request.predicate = NSPredicate(format: "id == %@", todoId as CVarArg)
+        request.fetchLimit = 1
+        guard let todo = (try? ctx.fetch(request))?.first, !todo.isCompleted else { return }
         onFire?(todo)
     }
 
@@ -110,11 +109,11 @@ final class ReminderScheduler {
 
     private func fire(todoId: UUID) {
         guard let container else { return }
-        let ctx = container.mainContext
-        let descriptor = FetchDescriptor<Todo>(
-            predicate: #Predicate<Todo> { $0.id == todoId }
-        )
-        guard let todo = (try? ctx.fetch(descriptor))?.first, !todo.isCompleted else {
+        let ctx = container.viewContext
+        let request = Todo.makeFetchRequest()
+        request.predicate = NSPredicate(format: "id == %@", todoId as CVarArg)
+        request.fetchLimit = 1
+        guard let todo = (try? ctx.fetch(request))?.first, !todo.isCompleted else {
             cancel(todoId: todoId)
             return
         }

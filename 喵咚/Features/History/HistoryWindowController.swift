@@ -7,7 +7,7 @@
 
 import AppKit
 import SwiftUI
-import SwiftData
+import CoreData
 
 @MainActor
 final class HistoryWindowController: NSObject, NSWindowDelegate {
@@ -19,7 +19,10 @@ final class HistoryWindowController: NSObject, NSWindowDelegate {
         super.init()
     }
 
-    func show(modelContainer: ModelContainer) {
+    func show(context: NSManagedObjectContext) {
+        // 收起悬浮主面板，避免它残留在历史窗口背后露出深色边
+        FloatingIconController.shared.hideContentPanel()
+
         if let existing = window {
             existing.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
@@ -44,7 +47,7 @@ final class HistoryWindowController: NSObject, NSWindowDelegate {
         win.backgroundColor = NSColor(red: 0.99, green: 0.98, blue: 0.96, alpha: 1.0)
 
         let root = HistoryView()
-            .modelContainer(modelContainer)
+            .environment(\.managedObjectContext, context)
 
         let hc = NSHostingController(rootView: root)
         hc.view.wantsLayer = true

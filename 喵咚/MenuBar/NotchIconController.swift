@@ -16,7 +16,7 @@
 
 import AppKit
 import SwiftUI
-import SwiftData
+import CoreData
 
 @MainActor
 final class NotchIconController: NSObject {
@@ -34,7 +34,7 @@ final class NotchIconController: NSObject {
     private var localClickMonitor: Any?
     private var keyboardMonitor: Any?
 
-    private var modelContainer: ModelContainer?
+    private var context: NSManagedObjectContext?
 
     private var currentScreen: NSScreen?
 
@@ -47,8 +47,8 @@ final class NotchIconController: NSObject {
 
     // MARK: - 公共 API
 
-    func setup<Content: View>(rootView: Content, modelContainer: ModelContainer? = nil) {
-        self.modelContainer = modelContainer
+    func setup<Content: View>(rootView: Content, context: NSManagedObjectContext? = nil) {
+        self.context = context
         teardown()
 
         guard let screen = NSScreen.notchPreferred else { return }
@@ -79,8 +79,8 @@ final class NotchIconController: NSObject {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .background(Color.clear)
 
-        let islandRoot = if let modelContainer {
-            AnyView(island.modelContainer(modelContainer))
+        let islandRoot = if let context {
+            AnyView(island.environment(\.managedObjectContext, context))
         } else {
             AnyView(island)
         }
@@ -228,8 +228,8 @@ final class NotchIconController: NSObject {
                   event.charactersIgnoringModifiers == "n"
             else { return event }
             Task { @MainActor [weak self] in
-                guard let container = self?.modelContainer else { return }
-                AddTodoWindowController.shared.show(modelContainer: container)
+                guard let ctx = self?.context else { return }
+                AddTodoWindowController.shared.show(context: ctx)
             }
             return nil  // 消费掉，不再向下传递
         }

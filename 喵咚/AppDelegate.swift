@@ -5,11 +5,11 @@
 
 import AppKit
 import SwiftUI
-import SwiftData
+import CoreData
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    var container: ModelContainer!
+    var container: NSPersistentContainer!
 
     private var currentIconMode: IconDisplayMode?
     private var modeChangeObserver: NSObjectProtocol?
@@ -22,6 +22,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             fatalError("ModelContainer 初始化失败: \(error)")
         }
 
+        // 三处图标共享的「有无未完成任务」状态，绑定主上下文（决定小猫挥手/睡觉）
+        CatActivityState.shared.attach(context: container.viewContext)
+
         // 2) 提醒系统：调度器 + 系统通知 + 应用内弹窗
         //    NotificationManager 单例 init 时会自动挂上 UNUserNotificationCenter delegate
         _ = NotificationManager.shared
@@ -30,7 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ReminderScheduler.shared.attach(container: container)
         ReminderScheduler.shared.onFire = { [weak self] todo in
             guard let self else { return }
-            let ctx = self.container.mainContext
+            let ctx = self.container.viewContext
             AlertWindowController.shared.show(
                 for: todo,
                 onComplete: { t in
@@ -57,7 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ReminderScheduler.shared.reload()
 
         // 3) 全局快速捕获（⌥Space 默认）
-        QuickCaptureController.shared.attach(modelContainer: container)
+        QuickCaptureController.shared.attach(context: container.viewContext)
         if UserDefaults.standard.object(forKey: AppSettingsKeys.quickCaptureEnabled) as? Bool ?? true {
             GlobalHotkeyManager.shared.onTriggered = {
                 QuickCaptureController.shared.toggle()
@@ -103,18 +106,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .menuBar:
             NotchIconController.shared.teardown()
             FloatingIconController.shared.teardown()
-            let root = ContentView(attachedToNotch: false).modelContainer(container)
-            MenuBarController.shared.setup(rootView: root, modelContainer: container)
+            let root = ContentView(attachedToNotch: false)
+                .environment(\.managedObjectContext, container.viewContext)
+            MenuBarController.shared.setup(rootView: root, context: container.viewContext)
         case .notch:
             MenuBarController.shared.teardown()
             FloatingIconController.shared.teardown()
             let hasPhysicalNotch = NSScreen.notchPreferred?.notchMetrics.hasPhysicalNotch ?? false
-            let root = ContentView(attachedToNotch: hasPhysicalNotch).modelContainer(container)
-            NotchIconController.shared.setup(rootView: root, modelContainer: container)
+            let root = ContentView(attachedToNotch: hasPhysicalNotch)
+                .environment(\.managedObjectContext, container.viewContext)
+            NotchIconController.shared.setup(rootView: root, context: container.viewContext)
         case .floating:
             MenuBarController.shared.teardown()
             NotchIconController.shared.teardown()
-            let root = ContentView(attachedToNotch: false).modelContainer(container)
+            let root = ContentView(attachedToNotch: false)
+                .environment(\.managedObjectContext, container.viewContext)
             FloatingIconController.shared.setup(rootView: root)
         }
     }

@@ -44,7 +44,7 @@ final class NotificationManager: NSObject {
         let content = UNMutableNotificationContent()
         content.title = "喵咚提醒"
         content.body = todo.title
-        content.sound = .default
+        content.sound = ReminderSound.notificationSound()
 
         let interval = max(1, fireDate.timeIntervalSinceNow)
         let trigger = UNTimeIntervalNotificationTrigger(timeInterval: interval, repeats: false)
@@ -73,7 +73,10 @@ private final class NotificationDelegateBridge: NSObject, UNUserNotificationCent
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        completionHandler([.banner, .sound])
+        // 关掉「播放提示音」时前台也不出声（content.sound 也已为 nil，这里双保险）
+        let options: UNNotificationPresentationOptions =
+            ReminderSound.isEnabled ? [.banner, .sound] : [.banner]
+        completionHandler(options)
     }
 
     nonisolated func userNotificationCenter(

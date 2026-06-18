@@ -8,11 +8,11 @@
 import SwiftUI
 import AppKit
 import Combine
-import SwiftData
+import CoreData
 
 struct NotchIslandView<Content: View>: View {
-    @Query(filter: #Predicate<Todo> { !$0.isCompleted })
-    private var activeTodos: [Todo]
+    /// 三处图标共享同一判断标准：有未完成任务即活跃（与状态栏 / 悬浮一致）
+    @ObservedObject private var activity = CatActivityState.shared
 
     @ObservedObject var viewModel: NotchIslandViewModel
     let content: Content
@@ -23,12 +23,7 @@ struct NotchIslandView<Content: View>: View {
     }
 
     private var isOpen: Bool { viewModel.status == .opened }
-    private var hasTodayTodos: Bool {
-        activeTodos.contains { todo in
-            guard let dueDate = todo.dueDate else { return false }
-            return Calendar.current.isDateInToday(dueDate)
-        }
-    }
+    private var hasActiveTodos: Bool { activity.hasActiveTodos }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -78,7 +73,7 @@ struct NotchIslandView<Content: View>: View {
     private var closedDecoration: some View {
         HStack(spacing: 0) {
             StatusCatFrameAnimation(
-                frameNames: hasTodayTodos
+                frameNames: hasActiveTodos
                     ? (3...6).map { "wave\($0)" }
                     : (5...8).map { "sleep\($0)" }
             )
@@ -89,7 +84,7 @@ struct NotchIslandView<Content: View>: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .allowsHitTesting(false)
-        .animation(.easeOut(duration: 0.36), value: hasTodayTodos)
+        .animation(.easeOut(duration: 0.36), value: hasActiveTodos)
     }
 
     // MARK: - 展开态：内嵌 ContentView
@@ -156,7 +151,7 @@ private struct StatusCatFrameAnimation: View {
         .onReceive(timer) { _ in
             frameIndex = (frameIndex + 1) % frameNames.count
         }
-        .onChange(of: frameNames) { _, _ in
+        .onChange(of: frameNames) { _ in
             frameIndex = 0
         }
     }

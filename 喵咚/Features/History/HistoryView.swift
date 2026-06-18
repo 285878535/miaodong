@@ -6,13 +6,13 @@
 //
 
 import SwiftUI
-import SwiftData
+import CoreData
 
 struct HistoryView: View {
-    @Query(sort: [SortDescriptor(\Todo.createdAt, order: .reverse)])
-    private var todos: [Todo]
+    @FetchRequest(fetchRequest: Todo.allByCreatedDescRequest())
+    private var todos: FetchedResults<Todo>
 
-    @Environment(\.modelContext) private var context
+    @Environment(\.managedObjectContext) private var context
     @AppStorage(AppSettingsKeys.accentColor) private var _accentColorId: String = ThemeColor.purple.rawValue
 
     @State private var selection: Set<UUID> = []
@@ -268,7 +268,7 @@ struct HistoryView: View {
 // MARK: - 单行（独立 View 减少父视图重渲染）
 
 private struct HistoryRow: View {
-    @Bindable var todo: Todo
+    @ObservedObject var todo: Todo
     let isSelected: Bool
     let onToggleSelect: () -> Void
 
